@@ -4,12 +4,11 @@ import os
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import transforms
 from tqdm import tqdm
 
 import config
 from calibration.profile import collect_profiles, compute_channel_thresholds
-from data.kitti import KITTIDepthDataset
+from data import make_dataset
 from losses.depth_loss import calculate_rmse, compute_depth_loss
 from models.backbone import get_mobilenetv2_backbone
 from models.decoder import SimpleDepthDecoder
@@ -23,13 +22,10 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def get_transform(size):
-    return transforms.Compose([
-        transforms.CenterCrop((size, size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ])
+def resolve_data_root(overridden):
+    if overridden:
+        return overridden
+    return config.TARTANAIR_ROOT if config.DATASET == 'tartanair' else config.DATA_ROOT
 
 
 def run_validation(model, loader, device, limit):
@@ -53,10 +49,11 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Workspace initialized. Using device: {device}')
 
-    transform = get_transform(config.INPUT_SIZE)
+    data_root = resolve_data_root(args.data_root)
+    print(f'Dataset: {config.DATASET} | Data root: {data_root}')
 
-    train_ds = KITTIDepthDataset(root_dir=args.data_root, transform=transform, mode='train')
-    val_ds = KITTIDepthDataset(root_dir=args.data_root, transform=transform, mode='val')
+    train_ds = make_dataset(config.DATASET, data_root, mode='train', input_size=config.INPUT_SIZE)
+    val_ds = make_dataset(config.DATASET, data_root, mode='val', input_size=config.INPUT_SIZE)
 
     train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE, shuffle=True,
                               num_workers=config.NUM_WORKERS)
@@ -124,7 +121,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train the T=1 SNN FastDepth decoder.')
-    parser.add_argument('--data_root', type=str, default=config.DATA_ROOT,
-                        help='Path to KITTI data (containing image/ and depth/ subfolders).')
+    parser.add_argument('--data_root', type=str, default=None,
+                        help='Path to dataset root (overrides config DATA_ROOT/TARTANAIR_ROOT).')
     args = parser.parse_args()
     main(args)

@@ -2,8 +2,12 @@
 # Global configuration for the T=1 SNN pipeline
 # ============================================
 
+# Dataset selector: 'kitti' | 'tartanair'
+DATASET = 'kitti'
+
 # Paths
 DATA_ROOT = 'data/kitti'
+TARTANAIR_ROOT = 'data/tartanair'
 CHECKPOINT_DIR = 'checkpoints'
 
 # Spatial-Masked Calibration

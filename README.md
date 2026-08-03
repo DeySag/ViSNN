@@ -19,7 +19,9 @@ ViSNN/
 └── fastdepth-t1-conversion (1).ipynb
 ├── fastdepth-t1-snn-prototype.ipynb  # Cell-by-cell pipeline prototype
 ├── data/
-│   └── kitti.py            # KITTIDepthDataset + align_depth_target
+│   ├── __init__.py        # Dataset registry + make_dataset factory + transforms
+│   ├── kitti.py           # KITTIDepthDataset + align_depth_target
+│   └── tartanair.py       # TartanAirDataset + align_depth_target
 ├── models/
 │   ├── backbone.py         # make_snn_ready + get_mobilenetv2_backbone
 │   ├── snn.py              # StrictT1SFN + convert_to_snn surgery
@@ -60,24 +62,57 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python train_depth.py --data_root <path_to_kitti>
+python train_depth.py --data_root <path_to_data>
 ```
 
-Expected KITTI layout (referenced by `KITTIDepthDataset`):
+The dataset is selected via `DATASET` in `config.py` (`'kitti'` or `'tartanair'`); the data root falls back to `DATA_ROOT` / `TARTANAIR_ROOT` per dataset unless overridden with `--data_root`.
 
+## Dataset Merge (KITTI ↔ TartanAir)
+
+Both datasets plug into the **identical** T=1 pipeline — models, SNN surgery, calibration, losses, and training loop are dataset-agnostic, consuming `[B,3,224,224]` images + `[B,1,224,224]` depth tensors. Switching datasets only changes the loader + spatial transform.
+
+### Supported layouts
+
+**KITTI** (`data/kitti/`):
 ```
 <data_root>/
 ├── image/   # RGB images (.png/.jpg/.jpeg)
-└── depth/   # 16-bit PNG dense LiDAR depth; meters = pixel / 256.0
+└── depth/   # 16-bit PNG dense LiDAR; meters = pixel / 256.0
 ```
+Transform: `CenterCrop(224×224)` on both RGB and aligned depth.
 
-`KITTIDepthDataset` center-crops both the RGB image and the aligned depth tensor to `224×224`.
+**TartanAir** (`data/tartanair/`):
+```
+<data_root>/
+├── image_left/
+│   └── **/image_left/*.png     # RGB
+└── depth_left/
+    └── **/depth_left/*.npy     # exact float meters (PNG /256.0 fallback)
+```
+Transform: `Resize(224×224)` on RGB and `F.interpolate` bilinear on depth.
+
+### Switching between them
+
+1. Set `DATASET = 'tartanair'` (or `'kitti'`) in `config.py`.
+2. Optionally set `TARTANAIR_ROOT` / `DATA_ROOT`, or pass `--data_root`.
+3. Run `python train_depth.py`.
+
+### Adding a third dataset
+
+1. Create `data/<name>.py` with a `Dataset` returning `image [3,224,224]`, `depth [1,224,224]`, plus an `align_depth_target` helper.
+2. Register it in the `DATASET_CLASS` dict in `data/__init__.py`.
+3. Add its spatial transform branch in `get_dataset_transform`.
+4. Set `DATASET = '<name>'` in `config.py`.
+
+The factory (`make_dataset`), calibration, surgery, and training loop require no further changes.
 
 ## Configuration (`config.py`)
 
 | Key | Default | Purpose |
 |-----|---------|---------|
+| `DATASET` | `kitti` | Dataset selector (`'kitti'` or `'tartanair'`) |
 | `DATA_ROOT` | `data/kitti` | KITTI root path |
+| `TARTANAIR_ROOT` | `data/tartanair` | TartanAir root path |
 | `PERCENTILE` | `99.0` | Channel-wise threshold percentile |
 | `CROP_MARGIN` | `2` | Padding-artifact margin cropped during calibration |
 | `CALIBRATION_BATCHES` | `20` | Batches for threshold stabilisation |
