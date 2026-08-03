@@ -2,11 +2,11 @@ import torch.nn as nn
 
 
 class SimpleDepthDecoder(nn.Module):
-    """Continuous upsampling decoder fed by the (frozen) SNN encoder."""
+    """Continuous upsampling decoder fed by a (frozen) SNN encoder."""
 
-    def __init__(self, backbone):
+    def __init__(self, encoder):
         super().__init__()
-        self.encoder = backbone.features
+        self.encoder = encoder
         self.decoder = nn.Sequential(
             nn.Conv2d(1280, 256, kernel_size=3, padding=1),
             nn.ReLU(inplace=False),
