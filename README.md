@@ -17,6 +17,18 @@ Based on *"One-Timestep is Enough: Achieving High-performance ANN-to-SNN
 Conversion via Scale-and-Fire Neurons"* (arXiv:2510.23383), and on the
 [DeySag/ViSNN](https://github.com/DeySag/ViSNN) reference implementation.
 
+### References
+
+Local copies of the key references live in the `reference/` folder:
+
+- **`reference/2510.23383v1 (1).pdf`** — the *"One-Timestep is Enough"* paper. This
+  is the primary research anchor for the project: the **Scale-and-Fire neuron**
+  itself, the global **scaling factor λ**, and the **multi-threshold (MTN)** fire
+  function are all implemented per this paper (see `models/snn.py` and
+  `calibration/lambda_search.py`).
+- **`reference/fastdepth-t1-conversion (1).ipynb`** — the original prototype
+  notebook that motivated the conversion approach, kept for provenance.
+
 ---
 
 ## Quick start
