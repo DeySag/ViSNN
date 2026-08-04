@@ -1,42 +1,81 @@
+"""Global scaling-factor (lambda) search.
+
+Per-channel thresholds set the shape of the spiking response; lambda scales all
+of them together. Lowering lambda lowers every effective threshold, so more
+neurons fire and more information survives the T=1 quantization, at the cost of
+a higher spike rate and therefore higher energy.
+
+The search is a plain grid: evaluate a small held-out set at each lambda and
+keep the best. It runs under `torch.no_grad()` and mutates only `lambda_`, so
+it is cheap and leaves no state behind beyond the winning value.
+"""
+
 import torch
-import torch.nn.functional as F
 
-from models.snn import set_lambda
-
-
-def compute_feature_mse(snn_features, continuous_features):
-    """Feature-level fidelity proxy between SNN and continuous encoders."""
-    return F.mse_loss(snn_features, continuous_features).item()
+import config
+from models.snn import set_lambda, set_spike_tracking, spike_report
 
 
 @torch.no_grad()
-def search_lambda(snn_encoder, golden_encoder, loader, device,
-                  grid=(0.1, 0.25, 0.5, 0.75, 1.0), num_batches=5):
-    """Grid-search the global SFN scaling factor lambda using a feature-MSE
-    proxy on the calibration/validation set. Returns (best_lambda, results)."""
-    continuous = []
-    for i, (images, _) in enumerate(loader):
-        if i >= num_batches:
+def search_lambda(model, loader, evaluate_fn, grid=config.LAMBDA_SEARCH_GRID,
+                  device=None, mode='min', max_batches=None, verbose=True,
+                  restore_best=True):
+    """Grid-search lambda against an arbitrary scalar objective.
+
+    Args:
+        model: a converted (spiking) model.
+        loader: validation loader.
+        evaluate_fn: `(model, loader, device, max_batches) -> float`.
+        mode: 'min' for error-like scores (RMSE, loss), 'max' for mAP.
+
+    Returns:
+        (best_lambda, {lambda: score}).
+    """
+    if mode not in ('min', 'max'):
+        raise ValueError("mode must be 'min' or 'max'")
+
+    was_training = model.training
+    model.eval()
+
+    scores = {}
+    for lambda_ in grid:
+        set_lambda(model, lambda_)
+        set_spike_tracking(model, enabled=True, reset=True)
+
+        score = float(evaluate_fn(model, loader, device, max_batches))
+        rate = spike_report(model)['overall']
+        scores[lambda_] = score
+
+        set_spike_tracking(model, enabled=False, reset=True)
+        if verbose:
+            print(f'  lambda={lambda_:<5.2f} score={score:.4f}  '
+                  f'spike_rate={rate:.3f}')
+
+    picker = min if mode == 'min' else max
+    best_lambda = picker(scores, key=scores.get)
+
+    set_lambda(model, best_lambda if restore_best else config.LAMBDA)
+    model.train(was_training)
+
+    if verbose:
+        print(f'  -> best lambda = {best_lambda} '
+              f'({scores[best_lambda]:.4f})')
+    return best_lambda, scores
+
+
+@torch.no_grad()
+def measure_spike_rate(model, loader, device, max_batches=5):
+    """Overall firing rate across the spiking layers, for energy reporting."""
+    was_training = model.training
+    model.eval()
+    set_spike_tracking(model, enabled=True, reset=True)
+
+    for i, batch in enumerate(loader):
+        if max_batches is not None and i >= max_batches:
             break
-        continuous.append(golden_encoder(images.to(device)).cpu())
-    continuous = torch.cat(continuous, dim=0)
-    print(f'Cached continuous features: {tuple(continuous.shape)}')
+        model(batch[0].to(device, non_blocking=True))
 
-    results = {}
-    best_lambda, best_mse = None, float('inf')
-    for lam in grid:
-        set_lambda(snn_encoder, lam)
-        per_bit = []
-        for i, (images, _) in enumerate(loader):
-            if i >= num_batches:
-                break
-            per_bit.append(snn_encoder(images.to(device)).cpu())
-        snn_features = torch.cat(per_bit, dim=0)
-        mse = compute_feature_mse(snn_features, continuous)
-        results[lam] = mse
-        print(f'  lambda={lam:.3f} -> feature MSE={mse:.6f}')
-        if mse < best_mse:
-            best_mse, best_lambda = mse, lam
-
-    set_lambda(snn_encoder, best_lambda)
-    return best_lambda, results
+    report = spike_report(model)
+    set_spike_tracking(model, enabled=False, reset=True)
+    model.train(was_training)
+    return report

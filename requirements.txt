@@ -1,6 +1,17 @@
+# Core
 torch>=2.0
 torchvision>=0.15
-numpy
-matplotlib
-tqdm
-pillow
+
+# Data / maths
+numpy>=1.24
+Pillow>=9.0
+
+# Visualisation (Role 3)
+matplotlib>=3.6
+
+# Notes:
+#   * pycocotools is deliberately NOT required -- data/coco.py parses the
+#     annotation JSON with the standard library, and validation/metrics_detection.py
+#     implements mAP directly.
+#   * For a CPU-only install:
+#       pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu

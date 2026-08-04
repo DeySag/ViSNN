@@ -1,29 +1,43 @@
-from torchvision import transforms
+"""Data pipeline: datasets, transforms, loaders, and synthetic stand-ins."""
 
-from .kitti import KITTIDepthDataset, align_depth_target
-from .tartanair import TartanAirDataset, align_depth_target
+from data.coco import COCODetectionDataset, detection_collate
+from data.kitti import KITTIDepthDataset, build_index, depth_collate
+from data.loaders import (
+    build_depth_datasets,
+    build_depth_loaders,
+    build_detection_datasets,
+    build_detection_loaders,
+    class_names_of,
+    images_only,
+    num_classes_of,
+)
+from data.synthetic import SyntheticDepthDataset, SyntheticDetectionDataset
+from data.transforms import (
+    DepthJointTransform,
+    DetectionTransform,
+    align_depth_target,
+    denormalize,
+    load_rgb,
+)
 
-DATASET_CLASS = {
-    'kitti': KITTIDepthDataset,
-    'tartanair': TartanAirDataset,
-}
-
-
-def get_dataset_transform(dataset, input_size):
-    common = [
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ]
-    if dataset == 'tartanair':
-        spatial = [transforms.Resize((input_size, input_size))]
-    else:
-        spatial = [transforms.CenterCrop((input_size, input_size))]
-    return transforms.Compose(spatial + common)
-
-
-def make_dataset(dataset, root_dir, mode='train', input_size=224):
-    cls = DATASET_CLASS[dataset]
-    return cls(root_dir=root_dir,
-               transform=get_dataset_transform(dataset, input_size),
-               mode=mode)
+__all__ = [
+    'COCODetectionDataset',
+    'DepthJointTransform',
+    'DetectionTransform',
+    'KITTIDepthDataset',
+    'SyntheticDepthDataset',
+    'SyntheticDetectionDataset',
+    'align_depth_target',
+    'build_depth_datasets',
+    'build_depth_loaders',
+    'build_detection_datasets',
+    'build_detection_loaders',
+    'build_index',
+    'class_names_of',
+    'denormalize',
+    'depth_collate',
+    'detection_collate',
+    'images_only',
+    'load_rgb',
+    'num_classes_of',
+]

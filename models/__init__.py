@@ -1,9 +1,87 @@
-from .backbone import get_mobilenetv2_backbone, make_snn_ready
-from .decoder import SimpleDepthDecoder
-from .snn import (
-    SFNNeuron,
-    convert_to_snn,
-    reset_spiking_state,
-    set_lambda,
+"""Model implementations: backbones, spiking conversion, decoder, SSD."""
+
+from models.backbone import (
+    MobileNetV2Backbone,
+    MobileNetV2SSDBackbone,
+    ResNet50Backbone,
+    build_backbone,
+    infer_feature_shapes,
 )
-from .spiking_encoder import SpikingEncoder
+from models.box_utils import (
+    batched_nms,
+    cxcywh_to_xyxy,
+    decode,
+    encode,
+    jaccard,
+    match_priors,
+    nms,
+    xyxy_to_cxcywh,
+)
+from models.decoder import (
+    SimpleDepthDecoder,
+    build_depth_model,
+    sanity_check_decoder,
+)
+from models.snn import (
+    ACTIVATION_TYPES,
+    StrictT1SFN,
+    assert_frozen,
+    assert_trainable,
+    convert_to_snn,
+    count_spiking_layers,
+    freeze_module,
+    reset_spiking_state,
+    set_fire_fn,
+    set_lambda,
+    set_spike_tracking,
+    set_timesteps,
+    spike_report,
+    spiking_forward,
+)
+from models.ssd import (
+    PriorBox,
+    SpikingSSD,
+    SSDHeads,
+    build_ssd_model,
+    decode_detections,
+    sanity_check_ssd,
+)
+
+__all__ = [
+    'ACTIVATION_TYPES',
+    'MobileNetV2Backbone',
+    'MobileNetV2SSDBackbone',
+    'PriorBox',
+    'ResNet50Backbone',
+    'SSDHeads',
+    'SimpleDepthDecoder',
+    'SpikingSSD',
+    'StrictT1SFN',
+    'assert_frozen',
+    'assert_trainable',
+    'batched_nms',
+    'build_backbone',
+    'build_depth_model',
+    'build_ssd_model',
+    'convert_to_snn',
+    'count_spiking_layers',
+    'cxcywh_to_xyxy',
+    'decode',
+    'decode_detections',
+    'encode',
+    'freeze_module',
+    'infer_feature_shapes',
+    'jaccard',
+    'match_priors',
+    'nms',
+    'reset_spiking_state',
+    'sanity_check_decoder',
+    'sanity_check_ssd',
+    'set_fire_fn',
+    'set_lambda',
+    'set_spike_tracking',
+    'set_timesteps',
+    'spike_report',
+    'spiking_forward',
+    'xyxy_to_cxcywh',
+]

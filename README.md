@@ -1,182 +1,309 @@
-# ViSNN — Minimal-Timestep Spiking Neural Network Depth Estimation
+# ViSNN — Two-Track ANN→SNN Conversion for Depth & Detection
 
-Low-latency, power-efficient depth estimation for autonomous robotics by converting a continuous **MobileNetV2** backbone into a **Scale-and-Fire SNN (SFN)** at the **minimum timestep where the accuracy/energy tradeoff is justified**, trained to predict `224×224` depth maps via a continuous upsampling decoder.
+Converts pretrained CNN backbones into **single-timestep (T=1) spiking networks**
+and trains continuous task heads on top of the frozen spiking features.
 
-**Research anchor:** "One-Timestep is Enough: Achieving High-performance ANN-to-SNN Conversion via Scale-and-Fire Neurons" (arXiv:2510.23383). The SFN neuron, scaling factor λ, and MTN fire function are implemented per that paper.
+| | Track A | Track B |
+|---|---|---|
+| **Task** | Monocular depth estimation | Object detection |
+| **Dataset** | KITTI (dense LiDAR depth annotations) | COCO 2017 |
+| **Architecture** | FastDepth-style: MobileNetV2 / ResNet-50 encoder + upsampling decoder | SSD (MultiBox) on a MobileNetV2 trunk |
+| **Spiking part** | Whole encoder (frozen) | MobileNet stages (frozen) |
+| **Trained part** | Depth decoder | SSD extra layers + loc/cls heads |
+| **Objective** | Masked RMSE + spatial gradient | Smooth-L1 + cross-entropy (MultiBox) |
+| **Metric** | RMSE, AbsRel, δ1/δ2/δ3 | mAP@0.5, mAP@[.5:.95] |
 
-## What we intend to build
+Based on *"One-Timestep is Enough: Achieving High-performance ANN-to-SNN
+Conversion via Scale-and-Fire Neurons"* (arXiv:2510.23383), and on the
+[DeySag/ViSNN](https://github.com/DeySag/ViSNN) reference implementation.
 
-1. **ANN → SNN conversion at minimal T, not strict T=1.** We replace the continuous MobileNetV2 encoder with an SFN (per-channel thresholds) and **sweep the timestep T** to find the knee of the accuracy-vs-energy curve. T=1 is the low-accuracy extreme; the goal is the smallest T whose depth RMSE is still acceptable.
-2. **A proper SFN, not a λ=1 binary step.** Two mechanisms from the paper:
-   - **Global scaling factor λ ∈ (0,1]** (searched on the validation feature-MSE proxy) — the decisive accuracy lever.
-   - **Two fire functions, ablated:** `binary` (classic scale-and-fire) and `mtn` (multi-threshold neuron: `θ·clip(⌊h/θ⌋, 0, N)`).
-3. **T-sweep Pareto harness.** For T ∈ {1,2,4,8,16,32} × fire_fn ∈ {binary, mtn}: calibrate → convert → train decoder → report RMSE, feature MSE, and a theoretical MAC→AC energy ratio. Emits `results/sweep_results.csv` + `results/sweep_plot.png`.
-4. **Dataset-agnostic pipeline.** The identical machinery runs on KITTI or TartanAir via a config flip.
+---
 
-## Repository Layout
+## Quick start
 
-```
-ViSNN/
-├── config.py                 # Global hyperparameters + SFN/T-sweep settings
-├── train_depth.py            # Single-config training (--timesteps/--fire_fn/--lambda)
-├── sweep_timesteps.py        # T x fire_fn Pareto sweep -> results CSV + plot
-├── energy.py                 # Theoretical MAC->AC energy estimator
-├── requirements.txt
-├── reference/                # Prior prototype notebook (reference only)
-├── fastdepth-t1-snn-prototype.ipynb  # Cell-by-cell pipeline prototype
-├── data/
-│   ├── __init__.py           # Dataset registry + make_dataset factory + transforms
-│   ├── kitti.py              # KITTIDepthDataset + align_depth_target
-│   └── tartanair.py          # TartanAirDataset + align_depth_target
-├── models/
-│   ├── backbone.py           # make_snn_ready + get_mobilenetv2_backbone
-│   ├── snn.py                # SFNNeuron + convert_to_snn + set_lambda/reset
-│   ├── spiking_encoder.py    # T-step rate-averaging encoder wrapper
-│   └── decoder.py            # SimpleDepthDecoder (continuous upsampling head)
-├── losses/
-│   └── depth_loss.py         # calculate_rmse, compute_depth_loss, compute_multibox_loss
-└── calibration/
-    ├── profile.py            # collect_profiles + compute_channel_thresholds
-    └── lambda_search.py      # search_lambda (global λ via feature-MSE proxy)
-```
-
-## Pipeline (stages)
-
-1. **Backbone procurement & surgery prep:** Load pretrained `mobilenet_v2`, recursively replace `ReLU6` → `nn.ReLU(inplace=False)` so hooks can read clean voltages.
-2. **Spatial-masked channel-wise calibration:** Run forward hooks over multiple batches, crop the outer padding artifacts (`CROP_MARGIN=2`), and compute a **unique threshold per channel** at the `TOP_P` percentile of the uncorrupted spatial core. **Performed once** and reused across the sweep.
-3. **SFN conversion surgery:** Recursively swap every `nn.ReLU` for an `SFNNeuron`:
-   - `thresholds` registered buffer `[1, C, 1, 1]` (broadcastable);
-   - **T=1:** `o = λθ · G_{λθ}(h)` — `binary` = step at effective threshold `λθ`; `mtn` = `λθ·clip(⌊h/(λθ)⌋, 0, N)`.
-   - **T>1:** membrane accumulation + reset-by-subtraction; the `SpikingEncoder` duplicates input across T steps and returns the **rate-averaged** features.
-4. **Global λ search (optional):** `search_lambda` grid-searches λ ∈ `LAMBDA_SEARCH_GRID` on the validation feature-MSE proxy (per fire function).
-5. **Encoder freeze + decoder training:** `requires_grad = False` on the SNN encoder; AdamW (`lr=1e-4`, `wd=1e-4`) trains only the continuous decoder. Spike features are extracted under `torch.no_grad()`, then the decoder maps them to depth.
-6. **Evaluation:** depth RMSE vs ground truth, feature-level MSE vs a fresh continuous encoder, and the `energy.py` MAC→AC ratio.
-
-## The SFN neuron (arXiv:2510.23383)
-
-```
-o(t) = λθ · G_{λθ}(h(t))
-θ   = top-p% activation per channel (calibrated)
-λ   = global scaling factor ∈ (0, 1]  (searchable)
-G   = fire function:
-      binary : step at λθ            -> o = λθ·1[h ≥ λθ]
-      mtn    : θ·clip(⌊h/θ⌋, 0, N)   -> multi-level quantization
-```
-
-Key facts from the paper driving our design:
-- A single-timestep Multi-Threshold Neuron is **theoretically equivalent** to a multi-timestep IF neuron (Temporal-to-Spatial Equivalence Theory).
-- λ is decisive: without scaling, all fire functions collapse (<5% accuracy); with it, near-lossless T=1.
-- The paper reports 88.8% ImageNet-1K, and on **COCO-2017 detection 60.3 mAP@.5:.95 at T=1** — the justification for Track B later.
-
-## Usage
+Install (CPU):
 
 ```bash
-# Single configuration
-python train_depth.py --data_root <path> \
-    --timesteps 4 --fire_fn mtn --lambda 0.25 --search_lambda
-
-# Full accuracy/energy sweep
-python sweep_timesteps.py --data_root <path> --epochs 5 [--search_lambda]
-
-# Outputs -> results/sweep_results.csv, results/sweep_plot.png
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ```
 
-The dataset is selected via `DATASET` in `config.py` (`'kitti'` or `'tartanair'`); the data root falls back to `DATA_ROOT` / `TARTANAIR_ROOT` unless overridden with `--data_root`.
+Then the rest:
 
-## Loss
-
-```python
-compute_depth_loss(pred, target, alpha=0.1):
-    rmse   = sqrt(MSE(pred, target))
-    grad_x = mean(|pred[:, :, :, :-1] - pred[:, :, :, 1:]|)
-    grad_y = mean(|pred[:, :, :-1, :] - pred[:, :, 1:, :]|)
-    return rmse + alpha * (grad_x + grad_y)
+```bash
+pip install -r requirements.txt
 ```
 
-> Note: the reference loss `sqrt(mean((pred - target) * 2))` was **incorrect** (missing the square). The implementation uses the corrected `sqrt(MSE(...))`.
+Verify the whole project without downloading a single dataset — 40 checks
+covering data alignment, neuron semantics, losses, box maths, metrics, and both
+end-to-end tracks:
 
-## Energy estimation (`energy.py`)
-
-SNN inference replaces multiply-accumulate (MAC) with accumulate-only (AC) ops + a threshold compare. Using 45nm figures (Horowitz 2014; `E_MAC=4.6pJ`, `E_AC=0.9pJ`, `E_COMPARE=0.05pJ`), `estimate_energy(model, input)` returns `(ann_energy_pJ, snn_energy_pJ, ac_fraction, firing_rate)`. **Energy is a hardware property** — these are relative estimates for the tradeoff curve, not deployment power.
-
-## Dataset Merge (KITTI ↔ TartanAir)
-
-Both datasets plug into the **identical** pipeline — models, SNN surgery, calibration, losses, and training loop are dataset-agnostic, consuming `[B,3,224,224]` images + `[B,1,224,224]` depth tensors.
-
-### Supported layouts
-
-**KITTI** (`data/kitti/`):
+```bash
+python tests/test_pipeline.py
 ```
-<data_root>/
-├── image/   # RGB images (.png/.jpg/.jpeg)
-└── depth/   # 16-bit PNG dense LiDAR; meters = pixel / 256.0
+
+Run either track on generated stand-in data:
+
+```bash
+python train_depth.py --synthetic --epochs 6 --fire-fn mtn --lambda 0.25 --lr 1e-3
 ```
-Transform: `CenterCrop(224×224)` on RGB and aligned depth.
 
-**TartanAir** (`data/tartanair/`):
+```bash
+python train_ssd.py --synthetic --epochs 12 --fire-fn mtn --lambda 0.25 --lr 1e-3
 ```
-<data_root>/
-├── image_left/
-│   └── **/image_left/*.png     # RGB
-└── depth_left/
-    └── **/depth_left/*.npy     # exact float meters (PNG /256.0 fallback)
+
+> **Note on the defaults.** The default configuration is strict binary spikes
+> at λ=1.0 — a genuine 1-bit activation that does not carry enough information
+> to generalise (measured val mAP 0.017 vs 0.819 for the working
+> configuration). The defaults in `config.py` are retained as the experimental
+> baseline; the two flags above select the configuration that works. Full
+> measurements are in [Measured results](#measured-results).
+
+---
+
+## Running on the real datasets
+
+### Track A — KITTI
+
+Download the **depth prediction** annotated maps *and* the matching raw frames
+(the annotation archive contains no RGB images). Point `--data-root` at any
+directory that contains both — the loader walks the tree, so the nesting does
+not matter:
+
 ```
-Transform: `Resize(224×224)` on RGB and `F.interpolate` bilinear on depth.
+datasets/kitti/
+├── 2011_09_26_drive_0001_sync/
+│   ├── image_02/data/0000000005.png                    # RGB
+│   └── proj_depth/groundtruth/image_02/0000000005.png  # 16-bit depth
+└── ...
+```
 
-### Switching between them
+```bash
+python train_depth.py --data-root datasets/kitti --epochs 10 --batch-size 16
+```
 
-1. Set `DATASET = 'tartanair'` (or `'kitti'`) in `config.py`.
-2. Optionally set `TARTANAIR_ROOT` / `DATA_ROOT`, or pass `--data_root`.
-3. Run `python train_depth.py` or `python sweep_timesteps.py`.
+### Track B — COCO
 
-### Adding a third dataset
+Standard COCO 2017 layout:
 
-1. Create `data/<name>.py` with a `Dataset` returning `image [3,224,224]`, `depth [1,224,224]`, plus an `align_depth_target` helper.
-2. Register it in the `DATASET_CLASS` dict in `data/__init__.py`.
-3. Add its spatial transform branch in `get_dataset_transform`.
-4. Set `DATASET = '<name>'` in `config.py`.
+```
+datasets/coco/
+├── annotations/instances_train2017.json
+├── annotations/instances_val2017.json
+├── train2017/*.jpg
+└── val2017/*.jpg
+```
 
-The factory (`make_dataset`), calibration, surgery, and training loop require no further changes.
+```bash
+python train_ssd.py --data-root datasets/coco --epochs 20 --lr 1e-3
+```
 
-## Configuration (`config.py`)
+`pycocotools` is **not** required — the annotation JSON is parsed with the
+standard library and mAP is implemented directly.
 
-| Key | Default | Purpose |
-|-----|---------|---------|
-| `DATASET` | `kitti` | Dataset selector (`'kitti'` or `'tartanair'`) |
-| `DATA_ROOT` / `TARTANAIR_ROOT` | `data/kitti` / `data/tartanair` | Dataset roots |
-| `CHECKPOINT_DIR` / `RESULTS_DIR` | `checkpoints` / `results` | Output dirs |
-| `TOP_P` | `99.0` | Per-channel threshold percentile (top-p%) |
-| `CROP_MARGIN` | `2` | Padding-artifact margin cropped during calibration |
-| `CALIBRATION_BATCHES` | `20` | Batches for threshold stabilisation |
-| `TIMESTEPS` | `1` | Inference timesteps T |
-| `FIRE_FN` | `binary` | SFN fire function (`binary` or `mtn`) |
-| `LAMBDA` | `1.0` | Global SFN scaling factor |
-| `N_LEVELS` | `8` | MTN quantization levels |
-| `LAMBDA_SEARCH_GRID` | `(0.1,0.25,0.5,0.75,1.0)` | λ candidates for search |
-| `SEARCH_LAMBDA` | `False` | Grid-search λ on val |
-| `SWEEP_TIMESTEPS` | `[1,2,4,8,16,32]` | T-sweep range |
-| `SWEEP_FIRE_FNS` | `['binary','mtn']` | Fire functions swept |
-| `SWEEP_EPOCHS` | `5` | Decoder epochs per sweep config |
-| `MAX_BATCHES` | `100` | Validation batch cap |
-| `INPUT_SIZE` | `224` | Spatial input size |
-| `BATCH_SIZE` | `16` | Batch size |
-| `LR` / `WEIGHT_DECAY` | `1e-4` / `1e-4` | AdamW hyperparameters |
-| `GRAD_LOSS_ALPHA` | `0.1` | Spatial-gradient loss weight |
-| `NUM_EPOCHS` | `10` | Decoder training epochs (single-config) |
-| `SEED` | `42` | Reproducibility seed |
+---
 
-## Key Modules
+## Project layout
 
-- **`SFNNeuron`** (`models/snn.py`): per-channel threshold buffer, `λ` scaling, `binary`/`mtn` fire functions, and a T>1 membrane-accumulation path.
-- **`SpikingEncoder`** (`models/spiking_encoder.py`): runs a frozen feature extractor over T timesteps and returns rate-averaged features (T=1 = single pass).
-- **`convert_to_snn`** (`models/snn.py`): recursive ReLU → `SFNNeuron` surgery.
-- **`set_lambda` / `reset_spiking_state`** (`models/snn.py`): global λ updates and per-batch membrane resets.
-- **`collect_profiles` / `compute_channel_thresholds`** (`calibration/profile.py`): spatial-masked channel-wise threshold calibration.
-- **`search_lambda`** (`calibration/lambda_search.py`): global λ grid search on a feature-MSE proxy.
-- **`estimate_energy`** (`energy.py`): MAC→AC energy-ratio estimator.
-- **`SimpleDepthDecoder`** (`models/decoder.py`): continuous upsampling block (1280→256→128→64→1) to `224×224`.
+```
+config.py              All hyperparameters and paths, one place
+utils.py               Seeding, device, checkpoints, meters
+pipeline.py            Calibrate -> convert -> freeze, for both tracks
+train_depth.py         Track A entrypoint
+train_ssd.py           Track B entrypoint
 
-## Roadmap (parallel tracks)
+data/
+├── kitti.py           os.walk indexing, 16-bit depth decode, drive-disjoint split
+├── coco.py            stdlib JSON parser, sparse->dense category remap
+├── transforms.py      Geometrically-aligned RGB/depth transforms
+├── synthetic.py       KITTI/COCO-shaped generated data (no download)
+└── loaders.py         DataLoader construction, real<->synthetic switch
 
-- **Track A — Depth (FastDepth):** This repo. KITTI (or TartanAir) dense-depth, RMSE-optimized, with the SFN T-sweep as the core result.
-- **Track B — Detection (SSD/COCO):** Binarized MobileNet feature extractor + continuous regression/classification heads. The SFN paper reports 60.3 mAP@.5:.95 on COCO-2017 at T=1, making this tractable; `compute_multibox_loss` scaffolding already exists in `losses/depth_loss.py`, with prior-box matching + SSD heads planned.
+models/
+├── snn.py             StrictT1SFN neuron + recursive conversion
+├── backbone.py        MobileNetV2 / ResNet-50, multi-scale SSD trunk
+├── decoder.py         SimpleDepthDecoder (32x upsampling)
+├── ssd.py             PriorBox, SSD heads, decode + NMS
+└── box_utils.py       IoU, encode/decode, prior matching, NMS
+
+calibration/
+├── profile.py         Spatial-masked per-channel threshold calibration
+└── lambda_search.py   Global scaling-factor grid search
+
+losses/
+├── depth_loss.py      Masked RMSE + spatial gradient
+└── multibox_loss.py   MultiBox with hard-negative mining
+
+validation/
+├── metrics_depth.py   RMSE, AbsRel, SqRel, RMSE_log, delta1/2/3
+├── metrics_detection.py  mAP from first principles
+└── visualize.py       Depth triptychs, box overlays, curves, spike rates
+
+tests/test_pipeline.py 40 end-to-end correctness checks
+```
+
+---
+
+## Pipeline
+
+**1. Data.** `DepthJointTransform` applies one crop to both the RGB frame and
+its depth map, so geometry cannot drift. COCO boxes are normalized to
+fractional `xyxy` at parse time, which makes them invariant to the later resize.
+
+**2. Calibration and conversion.** The continuous pretrained backbone is run
+over ~20 batches while forward hooks record per-channel activation percentiles,
+excluding a 2-pixel border (zero-padded convolutions inflate the outermost
+pixels). Every activation is then replaced by a `StrictT1SFN`:
+
+```
+o = θ_eff · 1[x ≥ θ_eff],    θ_eff = λ · θ_c
+```
+
+Emitting `θ_eff` rather than a bare `1.0` preserves the activation magnitude the
+next convolution expects, which is what makes T=1 conversion work. The converted
+trunk is then frozen.
+
+**3. Training.** AdamW sees only the continuous head. The frozen trunk runs
+under `torch.no_grad()`, so the computational graph starts at the decoder / SSD
+extras.
+
+**4. Validation.** Metrics accumulate over the whole validation set before the
+final division, figures are written per epoch, and per-layer spike rates are
+reported as the energy proxy.
+
+---
+
+## Key options
+
+| Flag | Meaning |
+|---|---|
+| `--synthetic` | Generated data; no dataset download needed |
+| `--timesteps N` | T. `1` is the headline config; `N>1` accumulates a membrane and averages rate-coded outputs |
+| `--fire-fn {binary,mtn}` | Strict binary spike, or multi-threshold graded spikes |
+| `--lambda L` | Global threshold scale. Lower ⇒ more spikes, more information, more energy |
+| `--search-lambda` | Grid-search λ against val RMSE / mAP |
+| `--percentile P` | Calibration percentile (default 99.0) |
+| `--crop-margin N` | Border pixels excluded from calibration (default 2) |
+| `--backbone {mobilenet_v2,resnet50}` | Track A encoder |
+| `--gradient-mode {smoothness,matching}` | See "Notes on the spec" below |
+| `--limit-train / --limit-val` | Subsample for fast iteration |
+
+---
+
+## Measured results
+
+Everything below was executed on this machine, not assumed.
+
+### Correctness
+
+- **40/40 checks pass** in `tests/test_pipeline.py`, including miniature
+  on-disk KITTI and COCO fixtures in the real formats (16-bit depth PNGs,
+  sparse COCO category ids, `iscrowd` filtering).
+- **Oracle check** — feeding exact encoded targets through `decode → NMS → mAP`
+  yields **mAP = 1.0**, so the evaluation path contributes no error of its own.
+- **Fit check** — the SSD heads reach **mAP@0.5 = 1.000** on a fitted batch
+  through the frozen T=1 spiking trunk, confirming prior matching, MultiBox
+  loss, box decoding, NMS and mAP are all wired correctly.
+- **Freeze check** — encoder weights are byte-identical before and after
+  training.
+
+### Choosing the neuron: a controlled experiment
+
+Training on 512 synthetic images for 12 epochs with a *frozen* trunk, held-out
+val split, everything else identical:
+
+| Backbone | spike rate | train mAP@0.5 | **val mAP@0.5** |
+|---|---|---|---|
+| Continuous (no conversion) | — | 0.52–0.66 | **0.66–0.73** |
+| `binary`, λ = 1.00 *(spec default)* | 0.171 | 0.38 | **0.017** |
+| `mtn` L=8, λ = 1.00 | 0.199 | 0.63 | **0.118** |
+| `mtn` L=8, λ = 0.25 | 0.474 | 0.97 | **0.819** |
+
+Same trend on the depth track (256 images, 6 epochs):
+
+| Neuron | spike rate | val RMSE | AbsRel | δ1 |
+|---|---|---|---|---|
+| `binary`, λ = 1.00 | 0.232 | 5.93 m | 0.185 | 0.745 |
+| `mtn` L=8, λ = 1.00 | 0.258 | 5.54 m | 0.173 | 0.787 |
+| `mtn` L=8, λ = 0.25 | 0.514 | **4.08 m** | **0.111** | **0.864** |
+
+**Reading this.** With strict binary spikes the model *memorises* the training
+set (train mAP 0.38) but does not generalise (val mAP 0.017). The continuous
+control is the important row: same architecture, same frozen trunk, same data,
+same schedule — it generalises fine. That rules out any data, matching, or
+metric bug and isolates the cause to the quantization itself.
+
+A binary spike is a genuine 1-bit activation: every input above threshold
+collapses to the same value, so all magnitude information is destroyed. The
+multi-threshold neuron emits `floor(x/θ)` clipped to L levels — about 3 bits —
+and λ = 0.25 lowers the thresholds so those levels are actually exercised
+rather than everything saturating at level 0 or 1. Note that λ and the neuron
+must be tuned *together*: lowering λ under a binary neuron makes things worse
+(mAP 0.187 at λ=0.25), because it fires more neurons without adding any
+resolution.
+
+λ ≈ 0.25 is also the optimum reported in the Scale-and-Fire paper, so this
+reproduces the published result. `--search-lambda` runs the grid automatically.
+
+---
+
+## Design notes
+
+A few places where the most direct formulation is wrong, and how the code
+handles them.
+
+1. **RMSE squaring.** `(predicted - target) * 2` doubles the error instead of
+   squaring it, making the "RMSE" the square root of a signed mean, which
+   returns `NaN` whenever the model over-predicts on average. Implemented as
+   `** 2` in `losses/depth_loss.py`, with a regression test.
+
+2. **Sparse LiDAR targets.** KITTI ground truth stores "no return" as `0.0`.
+   Averaging over those zeros trains the network to predict 0 metres across
+   ~85% of the frame, so every loss term is masked by `target > DEPTH_MIN`.
+
+3. **MultiBox balancing.** SSD emits ~1194 predictions per image for a handful
+   of objects. Averaging localisation over all priors drowns the real targets,
+   and averaging classification over ~99% background converges to "predict
+   background everywhere" with mAP pinned at zero. `losses/multibox_loss.py`
+   restricts localisation to matched positives and applies 3:1 hard-negative
+   mining.
+
+4. **Activation conversion.** torchvision's MobileNetV2 uses `nn.ReLU6`, which
+   subclasses `nn.Hardtanh` rather than `nn.ReLU`; an `isinstance(nn.ReLU)`
+   check would convert zero layers on that backbone. `models/snn.py`
+   handles both.
+
+Two further issues that were silent rather than wrong:
+
+- **BatchNorm drift.** `requires_grad = False` does not stop BatchNorm updating
+  its running statistics, so a plain `model.train()` keeps shifting the
+  distribution the thresholds were calibrated against. Both models override
+  `train()` to pin the frozen trunk to `eval()`.
+- **ResNet activation sharing.** `Bottleneck.forward` calls one `self.relu`
+  module three times, on tensors with two different channel counts, so
+  per-channel thresholds cannot be assigned. `split_resnet_relus` gives each
+  activation site its own module first.
+
+One deliberate divergence, left configurable:
+
+- The gradient term takes gradients of the *prediction alone*, which is a
+  smoothness prior — it penalises all structure and blurs edges, the opposite
+  of sharpening boundaries. It remains the default (`--gradient-mode
+  smoothness`); `--gradient-mode matching` compares prediction gradients
+  against ground-truth gradients and is the formulation that actually sharpens.
+
+Also worth noting: a 224x224 `CenterCrop` of a 1242x375 KITTI frame discards
+~82% of the width. It preserves true metric pixel scale, but `--spatial-mode
+resize` keeps the full field of view if you want to ablate it.
+
+---
+
+## Outputs
+
+```
+checkpoints/<tag>_best.pt          best-metric weights (head only — the trunk is frozen)
+checkpoints/<tag>_thresholds.npz   calibrated per-channel thresholds
+results/<tag>_epoch<NN>.png        per-epoch qualitative figures
+results/<tag>_curves.png           loss / metric curves
+results/<tag>_spike_rates.png      per-layer firing rates
+results/<tag>_summary.json         full run summary
+```

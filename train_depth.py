@@ -1,178 +1,233 @@
+"""Track A entrypoint: FastDepth-style depth estimation on a spiking backbone.
+
+    python train_depth.py --synthetic --epochs 2          # no dataset needed
+    python train_depth.py --data-root datasets/kitti --epochs 10
+
+Pipeline: build loaders -> calibrate the continuous backbone -> convert to
+StrictT1SFN -> freeze -> train the continuous decoder -> validate, visualise,
+checkpoint.
+"""
+
 import argparse
+import json
 import os
+import time
 
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import models as torchvision_models
-from tqdm import tqdm
 
 import config
-from calibration.lambda_search import search_lambda
-from calibration.profile import collect_profiles, compute_channel_thresholds
-from data import make_dataset
-from losses.depth_loss import calculate_rmse, compute_depth_loss
-from models.backbone import get_mobilenetv2_backbone
-from models.decoder import SimpleDepthDecoder
-from models.snn import convert_to_snn
-from models.spiking_encoder import SpikingEncoder
+import utils
+from calibration.lambda_search import measure_spike_rate, search_lambda
+from data.loaders import build_depth_loaders
+from losses.depth_loss import DepthLoss
+from models.snn import reset_spiking_state, set_spike_tracking, spiking_forward
+from pipeline import build_depth_pipeline
+from validation.metrics_depth import evaluate_depth, evaluate_depth_rmse, format_metrics
+from validation.visualize import plot_curves, plot_spike_rates, visualize_depth_model
 
 
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train the spiking depth model')
+    parser.add_argument('--data-root', default=config.KITTI_ROOT)
+    parser.add_argument('--synthetic', action='store_true',
+                        help='use generated KITTI-shaped data (no download)')
+    parser.add_argument('--backbone', default='mobilenet_v2',
+                        choices=['mobilenet_v2', 'resnet50'])
+    parser.add_argument('--no-pretrained', action='store_true')
+    parser.add_argument('--spatial-mode', default=config.KITTI_SPATIAL_MODE,
+                        choices=['crop', 'resize'])
+    parser.add_argument('--output-activation', default='relu',
+                        choices=['relu', 'softplus', 'linear'])
+
+    parser.add_argument('--epochs', type=int, default=config.NUM_EPOCHS)
+    parser.add_argument('--batch-size', type=int, default=config.BATCH_SIZE)
+    parser.add_argument('--lr', type=float, default=config.LR)
+    parser.add_argument('--weight-decay', type=float, default=config.WEIGHT_DECAY)
+    parser.add_argument('--alpha', type=float, default=config.GRAD_LOSS_ALPHA,
+                        help='weight of the spatial-gradient loss term')
+    parser.add_argument('--gradient-mode', default='smoothness',
+                        choices=['smoothness', 'matching'])
+    parser.add_argument('--num-workers', type=int, default=config.NUM_WORKERS)
+
+    parser.add_argument('--timesteps', type=int, default=config.TIMESTEPS)
+    parser.add_argument('--fire-fn', default=config.FIRE_FN,
+                        choices=['binary', 'mtn'])
+    parser.add_argument('--lambda', dest='lambda_', type=float,
+                        default=config.LAMBDA)
+    parser.add_argument('--n-levels', type=int, default=config.N_LEVELS)
+    parser.add_argument('--search-lambda', action='store_true')
+    parser.add_argument('--calibration-batches', type=int,
+                        default=config.CALIBRATION_BATCHES)
+    parser.add_argument('--percentile', type=float, default=config.TOP_P)
+    parser.add_argument('--crop-margin', type=int, default=config.CROP_MARGIN)
+
+    parser.add_argument('--limit-train', type=int, default=None)
+    parser.add_argument('--limit-val', type=int, default=None)
+    parser.add_argument('--eval-batches', type=int, default=config.MAX_EVAL_BATCHES)
+    parser.add_argument('--device', default=None)
+    parser.add_argument('--seed', type=int, default=config.SEED)
+    parser.add_argument('--tag', default='depth')
+    return parser.parse_args()
 
 
-def resolve_data_root(overridden):
-    if overridden:
-        return overridden
-    return config.TARTANAIR_ROOT if config.DATASET == 'tartanair' else config.DATA_ROOT
+def train_one_epoch(model, loader, optimizer, criterion, device, epoch,
+                    timesteps=1, grad_clip=config.GRAD_CLIP,
+                    log_interval=config.LOG_INTERVAL):
+    """One pass over the training set. Only the decoder receives gradients."""
+    model.train()          # the encoder is pinned to eval() by the override
+    loss_meter = utils.AverageMeter()
+    rmse_meter = utils.AverageMeter()
+    start = time.perf_counter()
+
+    for step, (images, gt_depths) in enumerate(loader):
+        images = images.to(device, non_blocking=True)
+        gt_depths = gt_depths.to(device, non_blocking=True)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        # Step 1: frozen spiking encoder. no_grad is not strictly required
+        # (its parameters have requires_grad=False) but it avoids retaining
+        # activations for a backward pass that will never reach them.
+        with torch.no_grad():
+            features = spiking_forward(model.encoder, images,
+                                       timesteps=timesteps)
+
+        # Step 2: continuous decoder -- this is where the graph starts.
+        predicted = model.decode(features)
+
+        # Step 3: masked RMSE + spatial gradient term.
+        loss, parts = criterion(predicted, gt_depths, return_parts=True)
+        loss.backward()
+
+        if grad_clip:
+            torch.nn.utils.clip_grad_norm_(model.head.parameters(), grad_clip)
+
+        # Step 4: update the decoder only.
+        optimizer.step()
+
+        batch_size = images.shape[0]
+        loss_meter.update(loss.item(), batch_size)
+        rmse_meter.update(parts['rmse'].item(), batch_size)
+
+        if log_interval and (step + 1) % log_interval == 0:
+            print(f'  epoch {epoch} [{step + 1}/{len(loader)}]  '
+                  f'loss {loss_meter.avg:.4f}  rmse {rmse_meter.avg:.4f} m  '
+                  f'valid {parts["valid_fraction"].item():.3f}')
+
+    return {'loss': loss_meter.avg, 'train_rmse': rmse_meter.avg,
+            'seconds': time.perf_counter() - start}
 
 
-def calibrate_thresholds(backbone, val_loader, device):
-    """Spatial-masked, channel-wise threshold calibration (continuous pass)."""
-    profiles = collect_profiles(backbone, val_loader, device, config.CALIBRATION_BATCHES)
-    channel_thresholds = compute_channel_thresholds(profiles, config.TOP_P, config.CROP_MARGIN)
-    print(f'Computed channel-wise thresholds for {len(channel_thresholds)} layers.')
-    return channel_thresholds
+def main():
+    args = parse_args()
+    utils.set_seed(args.seed)
+    config.ensure_dirs()
 
+    device = utils.get_device(args.device)
+    print('== Track A: spiking depth estimation ==')
+    print(f'device: {device} | torch {torch.__version__}')
 
-def build_spiking_encoder(device, timesteps, fire_fn, lambda_, n_levels,
-                          channel_thresholds):
-    """Fresh backbone + SNN surgery -> SpikingEncoder wrapper."""
-    backbone = get_mobilenetv2_backbone(device)
-    convert_to_snn(backbone, channel_thresholds, device, lambda_=lambda_,
-                   fire_fn=fire_fn, timesteps=timesteps, n_levels=n_levels)
-    print(f'Surgery complete: SFN ({fire_fn}) at T={timesteps}, lambda={lambda_}.')
-    return SpikingEncoder(backbone.features, timesteps=timesteps)
+    # ---- Data ------------------------------------------------------------
+    train_loader, val_loader = build_depth_loaders(
+        root=args.data_root, synthetic=args.synthetic,
+        batch_size=args.batch_size, num_workers=args.num_workers,
+        device=device, spatial_mode=args.spatial_mode,
+        max_train=args.limit_train, max_val=args.limit_val)
+    print(f'[data] train {len(train_loader.dataset)} sample(s) | '
+          f'val {len(val_loader.dataset)} sample(s) | '
+          f'batch {args.batch_size}')
 
+    # ---- Calibration and conversion --------------------------------------
+    threshold_path = os.path.join(config.CHECKPOINT_DIR,
+                                  f'{args.tag}_thresholds.npz')
+    model, _thresholds = build_depth_pipeline(
+        train_loader, device, backbone_name=args.backbone,
+        pretrained=not args.no_pretrained,
+        output_activation=args.output_activation,
+        calibration_batches=min(args.calibration_batches, len(train_loader)),
+        percentile=args.percentile, crop_margin=args.crop_margin,
+        lambda_=args.lambda_, fire_fn=args.fire_fn, timesteps=args.timesteps,
+        n_levels=args.n_levels, threshold_path=threshold_path)
 
-def search_lambda_for_encoder(snn_encoder, device, val_loader):
-    """Grid-search the global scaling factor via feature-MSE proxy."""
-    golden = torchvision_models.mobilenet_v2(weights='DEFAULT').features.to(device)
-    golden.eval()
-    best, results = search_lambda(snn_encoder, golden, val_loader, device,
-                                  grid=config.LAMBDA_SEARCH_GRID,
-                                  num_batches=config.CALIBRATION_BATCHES)
-    print(f'Lambda search: {results} -> best lambda={best:.3f}')
-    return best
-
-
-def train_decoder(model, train_loader, device, epochs=config.NUM_EPOCHS):
-    """Train only the continuous decoder on top of the frozen spiking encoder."""
-    for param in model.encoder.parameters():
-        param.requires_grad = False
-    model.encoder.eval()
-    for param in model.decoder.parameters():
-        assert param.requires_grad, 'Decoder gradient is frozen!'
-
-    optimizer = optim.AdamW(model.decoder.parameters(),
-                            lr=config.LR, weight_decay=config.WEIGHT_DECAY)
-
-    model.train()
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        n_batches = 0
-        for images, gt_depths in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{epochs}'):
-            images = images.to(device)
-            gt_depths = gt_depths.to(device)
-
-            optimizer.zero_grad()
-
-            with torch.no_grad():
-                spiking_features = model.encoder(images)
-
-            predicted_depths = model.decoder(spiking_features)
-            loss = compute_depth_loss(predicted_depths, gt_depths, config.GRAD_LOSS_ALPHA)
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            n_batches += 1
-
-        print(f'Epoch {epoch + 1}: avg train loss = {epoch_loss / n_batches:.4f}')
-    model.eval()
-
-
-def run_validation(model, loader, device, limit):
-    total_rmse = 0.0
-    n = 0
-    model.eval()
-    with torch.no_grad():
-        for images, gt_depths in tqdm(loader, total=limit, desc='Validating'):
-            images = images.to(device)
-            gt_depths = gt_depths.to(device)
-            total_rmse += calculate_rmse(model(images), gt_depths)
-            n += 1
-            if n >= limit:
-                break
-    return total_rmse / n
-
-
-def main(args):
-    os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
-    set_seed(config.SEED)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Workspace initialized. Using device: {device}')
-
-    data_root = resolve_data_root(args.data_root)
-    print(f'Dataset: {config.DATASET} | Data root: {data_root}')
-
-    train_ds = make_dataset(config.DATASET, data_root, mode='train', input_size=config.INPUT_SIZE)
-    val_ds = make_dataset(config.DATASET, data_root, mode='val', input_size=config.INPUT_SIZE)
-
-    train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE, shuffle=True,
-                              num_workers=config.NUM_WORKERS)
-    val_loader = DataLoader(val_ds, batch_size=config.BATCH_SIZE, shuffle=False,
-                            num_workers=config.NUM_WORKERS)
-
-    # 1. Calibrate thresholds on a continuous backbone (once, dataset stats).
-    probe_backbone = get_mobilenetv2_backbone(device)
-    channel_thresholds = calibrate_thresholds(probe_backbone, val_loader, device)
-    del probe_backbone
-
-    # 2. Build the spiking encoder with the requested SFN configuration.
-    lambda_ = args.lambda_
-    encoder = build_spiking_encoder(device, args.timesteps, args.fire_fn,
-                                    lambda_, args.n_levels, channel_thresholds)
-    encoder.eval()
-
-    # 3. Optional global-lambda search on the validation feature-MSE proxy.
     if args.search_lambda:
-        lambda_ = search_lambda_for_encoder(encoder, device, val_loader)
+        print('[calibrate] searching lambda...')
+        best_lambda, _scores = search_lambda(
+            model, val_loader, evaluate_depth_rmse,
+            grid=config.LAMBDA_SEARCH_GRID, device=device, mode='min',
+            max_batches=args.eval_batches)
+        args.lambda_ = best_lambda
 
-    # 4. Assemble the full depth model and train the decoder.
-    model = SimpleDepthDecoder(encoder).to(device)
-    model.eval()
-    train_decoder(model, train_loader, device, epochs=args.epochs)
+    # ---- Training --------------------------------------------------------
+    optimizer = optim.AdamW(model.head.parameters(), lr=args.lr,
+                            weight_decay=args.weight_decay)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(args.epochs, 1))
+    criterion = DepthLoss(alpha=args.alpha, gradient_mode=args.gradient_mode)
 
-    # 5. Evaluate.
-    trained_rmse = run_validation(model, val_loader, device, config.MAX_BATCHES)
-    print(f'Trained SFN RMSE (T={args.timesteps}, {args.fire_fn}, lambda={lambda_}): {trained_rmse:.4f}')
+    history = {'loss': [], 'train_rmse': [], 'val_rmse': [], 'delta1': []}
+    best_rmse = float('inf')
 
-    checkpoint_path = os.path.join(config.CHECKPOINT_DIR, 'trained_snn_depth.pth')
-    torch.save(model.state_dict(), checkpoint_path)
-    print(f'Checkpoint saved: {checkpoint_path}')
+    for epoch in range(1, args.epochs + 1):
+        stats = train_one_epoch(model, train_loader, optimizer, criterion,
+                                device, epoch, timesteps=args.timesteps)
+        scheduler.step()
+
+        metrics = evaluate_depth(model, val_loader, device,
+                                 max_batches=args.eval_batches,
+                                 timesteps=args.timesteps)
+
+        history['loss'].append(stats['loss'])
+        history['train_rmse'].append(stats['train_rmse'])
+        history['val_rmse'].append(metrics['rmse'])
+        history['delta1'].append(metrics['delta1'])
+
+        print(f'epoch {epoch}/{args.epochs}  '
+              f'loss {stats["loss"]:.4f}  ({stats["seconds"]:.1f}s)')
+        print(format_metrics(metrics, prefix='  val: '))
+
+        visualize_depth_model(
+            model, val_loader, device,
+            os.path.join(config.RESULTS_DIR,
+                         f'{args.tag}_epoch{epoch:02d}.png'),
+            timesteps=args.timesteps,
+            title=f'Epoch {epoch} -- val RMSE {metrics["rmse"]:.3f} m')
+
+        if metrics['rmse'] < best_rmse:
+            best_rmse = metrics['rmse']
+            utils.save_checkpoint({
+                'epoch': epoch,
+                'decoder_state': model.head.state_dict(),
+                'metrics': metrics,
+                'args': vars(args),
+            }, f'{args.tag}_best.pt')
+            print(f'  new best RMSE {best_rmse:.4f} m -> checkpoint saved')
+
+    # ---- Reporting -------------------------------------------------------
+    plot_curves(history, os.path.join(config.RESULTS_DIR,
+                                      f'{args.tag}_curves.png'),
+                title='Track A -- spiking depth estimation')
+
+    reset_spiking_state(model.encoder)
+    spike = measure_spike_rate(model.encoder, val_loader, device, max_batches=3)
+    plot_spike_rates(spike, os.path.join(config.RESULTS_DIR,
+                                         f'{args.tag}_spike_rates.png'))
+    set_spike_tracking(model.encoder, enabled=False)
+
+    summary = {
+        'best_val_rmse': best_rmse,
+        'overall_spike_rate': spike['overall'],
+        'history': history,
+        'args': vars(args),
+    }
+    summary_path = os.path.join(config.RESULTS_DIR, f'{args.tag}_summary.json')
+    with open(summary_path, 'w', encoding='utf-8') as handle:
+        json.dump(summary, handle, indent=2)
+
+    print(f'\nbest val RMSE: {best_rmse:.4f} m')
+    print(f'overall spike rate: {spike["overall"]:.4f}')
+    print(f'artifacts -> {config.RESULTS_DIR}')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train the SFN FastDepth decoder.')
-    parser.add_argument('--data_root', type=str, default=None,
-                        help='Path to dataset root (overrides config DATA_ROOT/TARTANAIR_ROOT).')
-    parser.add_argument('--timesteps', type=int, default=config.TIMESTEPS,
-                        help=f'Inference timesteps T (default {config.TIMESTEPS}).')
-    parser.add_argument('--fire_fn', type=str, default=config.FIRE_FN,
-                        choices=['binary', 'mtn'],
-                        help=f'SFN fire function (default {config.FIRE_FN}).')
-    parser.add_argument('--lambda', dest='lambda_', type=float, default=config.LAMBDA,
-                        help=f'Global SFN scaling factor (default {config.LAMBDA}).')
-    parser.add_argument('--n_levels', type=int, default=config.N_LEVELS,
-                        help=f'MTN quantization levels (default {config.N_LEVELS}).')
-    parser.add_argument('--search_lambda', action='store_true', default=config.SEARCH_LAMBDA,
-                        help='Grid-search lambda on the val feature-MSE proxy.')
-    parser.add_argument('--epochs', type=int, default=config.NUM_EPOCHS,
-                        help=f'Decoder training epochs (default {config.NUM_EPOCHS}).')
-    args = parser.parse_args()
-    main(args)
+    main()
