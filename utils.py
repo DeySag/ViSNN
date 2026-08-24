@@ -1,5 +1,6 @@
 """Small shared helpers: seeding, device selection, checkpoint I/O, timing."""
 
+import csv
 import os
 import random
 import time
@@ -81,4 +82,43 @@ class Timer:
 
     def __exit__(self, *exc):
         self.elapsed = time.perf_counter() - self.start
+        return False
+
+
+class MetricsCSVWriter:
+    """Append-only per-epoch metrics CSV.
+
+    One row is flushed as soon as an epoch finishes, so a crashed session
+    still leaves the partial history on disk. Extra keys in the row dict are
+    ignored rather than widening the header, which keeps the schema stable
+    when optional metrics (e.g. mAP@[.5:.95]) come and go between epochs.
+    """
+
+    def __init__(self, path, fieldnames):
+        self.path = path
+        self.fieldnames = list(fieldnames)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        new_file = not os.path.exists(path)
+        self._handle = open(path, 'a', newline='', encoding='utf-8')
+        self._writer = csv.DictWriter(self._handle,
+                                      fieldnames=self.fieldnames,
+                                      extrasaction='ignore')
+        if new_file:
+            self._writer.writeheader()
+            self._handle.flush()
+
+    def append(self, row):
+        # Missing fields become empty cells; None renders as '' not 'None'.
+        cleaned = {k: ('' if v is None else v) for k, v in row.items()}
+        self._writer.writerow(cleaned)
+        self._handle.flush()
+
+    def close(self):
+        self._handle.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
         return False

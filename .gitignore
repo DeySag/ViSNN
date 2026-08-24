@@ -1,7 +1,15 @@
 # Datasets and generated artifacts
 datasets/
 checkpoints/
-results/
+# Run artifacts: figures/logs stay local, but run summaries (json/csv) are
+# tracked so experiment records survive session churn. The re-include dance
+# works because results/** excludes directories too; !results/**/ un-excludes
+# the directories themselves, then json/csv files are re-included explicitly.
+results/**
+!results/**/
+!results/**/*.json
+!results/**/*.csv
+!results/**/*.md
 *.npz
 *.pt
 *.pth

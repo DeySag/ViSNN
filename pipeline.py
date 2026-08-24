@@ -87,17 +87,26 @@ def build_depth_pipeline(loader, device, backbone_name='mobilenet_v2',
                          lambda_=config.LAMBDA, fire_fn=config.FIRE_FN,
                          timesteps=config.TIMESTEPS,
                          n_levels=config.N_LEVELS,
-                         threshold_path=None, verbose=True):
-    """Return (model, thresholds) for the depth track, ready to train."""
+                         threshold_path=None, verbose=True,
+                         convert=True):
+    """Return (model, thresholds) for the depth track, ready to train.
+
+    With ``convert=False`` the calibration/conversion steps are skipped and
+    the continuous pretrained backbone is frozen as-is. This is the
+    continuous control row of the headline table: identical architecture,
+    data and schedule, quantization isolated as the only difference.
+    """
     backbone, out_channels = build_backbone(backbone_name, pretrained=pretrained)
     backbone = backbone.to(device)
 
-    thresholds = calibrate_and_convert(
-        backbone, backbone, loader, device,
-        num_batches=calibration_batches, percentile=percentile,
-        crop_margin=crop_margin, lambda_=lambda_, fire_fn=fire_fn,
-        timesteps=timesteps, n_levels=n_levels,
-        threshold_path=threshold_path, verbose=verbose)
+    thresholds = None
+    if convert:
+        thresholds = calibrate_and_convert(
+            backbone, backbone, loader, device,
+            num_batches=calibration_batches, percentile=percentile,
+            crop_margin=crop_margin, lambda_=lambda_, fire_fn=fire_fn,
+            timesteps=timesteps, n_levels=n_levels,
+            threshold_path=threshold_path, verbose=verbose)
 
     freeze_module(backbone)
     assert_frozen(backbone, 'depth backbone')
@@ -110,9 +119,9 @@ def build_depth_pipeline(loader, device, backbone_name='mobilenet_v2',
     if verbose:
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
-        print(f'[build] depth model: {count_spiking_layers(backbone)} spiking '
-              f'layer(s) | {frozen / 1e6:.2f}M frozen, '
-              f'{trainable / 1e6:.2f}M trainable')
+        kind = 'spiking' if convert else 'continuous (control)'
+        print(f'[build] depth model: {kind} encoder | '
+              f'{frozen / 1e6:.2f}M frozen, {trainable / 1e6:.2f}M trainable')
     return model, thresholds
 
 
@@ -126,25 +135,28 @@ def build_ssd_pipeline(loader, device, num_classes=config.NUM_CLASSES,
                        crop_margin=config.CROP_MARGIN,
                        lambda_=config.LAMBDA, fire_fn=config.FIRE_FN,
                        timesteps=config.TIMESTEPS, n_levels=config.N_LEVELS,
-                       threshold_path=None, verbose=True):
+                       threshold_path=None, verbose=True, convert=True):
     """Return (model, thresholds) for the detection track, ready to train.
 
     Only the MobileNet stages are calibrated and converted; the SSD extra
     layers and heads are freshly initialised, have no meaningful activation
-    statistics, and stay continuous.
+    statistics, and stay continuous. ``convert=False`` keeps the MobileNet
+    stages continuous as well -- the control configuration for Track B.
     """
     model = SpikingSSD(num_classes=num_classes, pretrained=pretrained).to(device)
 
-    # One ModuleList, reused for both profiling and conversion, so the layer
-    # names are guaranteed identical between the two passes.
-    trunk = model.backbone.spiking_trunk().to(device)
+    thresholds = None
+    if convert:
+        # One ModuleList, reused for both profiling and conversion, so the
+        # layer names are guaranteed identical between the two passes.
+        trunk = model.backbone.spiking_trunk().to(device)
 
-    thresholds = calibrate_and_convert(
-        model.backbone, trunk, loader, device,
-        num_batches=calibration_batches, percentile=percentile,
-        crop_margin=crop_margin, lambda_=lambda_, fire_fn=fire_fn,
-        timesteps=timesteps, n_levels=n_levels,
-        threshold_path=threshold_path, verbose=verbose)
+        thresholds = calibrate_and_convert(
+            model.backbone, trunk, loader, device,
+            num_batches=calibration_batches, percentile=percentile,
+            crop_margin=crop_margin, lambda_=lambda_, fire_fn=fire_fn,
+            timesteps=timesteps, n_levels=n_levels,
+            threshold_path=threshold_path, verbose=verbose)
 
     freeze_module(model.backbone.stage1)
     freeze_module(model.backbone.stage2)
@@ -159,7 +171,8 @@ def build_ssd_pipeline(loader, device, num_classes=config.NUM_CLASSES,
     if verbose:
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
-        print(f'[build] ssd model: {count_spiking_layers(model.backbone)} '
-              f'spiking layer(s) | {model.priors.shape[0]} priors | '
+        kind = (f'{count_spiking_layers(model.backbone)} spiking layer(s)'
+                if convert else 'continuous trunk (control)')
+        print(f'[build] ssd model: {kind} | {model.priors.shape[0]} priors | '
               f'{frozen / 1e6:.2f}M frozen, {trainable / 1e6:.2f}M trainable')
     return model, thresholds

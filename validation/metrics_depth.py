@@ -21,13 +21,44 @@ from losses.depth_loss import valid_mask
 
 EPS = 1e-6
 
+# Eigen evaluation crop, as fractional row/column bounds of the frame. These
+# are the constants used by the KITTI depth-prediction benchmark and most
+# follow-up work (monodepth, monodepth2): on a 375x1242 frame they select rows
+# 153:371 and columns 44:1197.
+#
+# Caveat: the fractions are defined on the FULL camera frame. They are exactly
+# comparable to published numbers only when the network sees the full frame
+# (spatial_mode='resize'). With the default 'crop' mode the 224x224 input is
+# already a centre crop of the original, so applying these fractions again
+# crops a smaller inner window -- still a well-defined protocol, but not
+# directly comparable to the literature.
+EIGEN_CROP_ROWS = (0.40810811, 0.99189189)
+EIGEN_CROP_COLS = (0.03594771, 0.96405229)
+
+
+def eigen_crop_slice(height, width):
+    """Pixel row/col bounds of the Eigen crop for a given frame size."""
+    r0 = int(height * EIGEN_CROP_ROWS[0])
+    r1 = int(height * EIGEN_CROP_ROWS[1])
+    c0 = int(width * EIGEN_CROP_COLS[0])
+    c1 = int(width * EIGEN_CROP_COLS[1])
+    return r0, r1, c0, c1
+
 
 class DepthMetrics:
-    """Streaming accumulator for the depth metric suite."""
+    """Streaming accumulator for the depth metric suite.
 
-    def __init__(self, min_depth=config.DEPTH_MIN, max_depth=config.DEPTH_MAX):
+    Args:
+        min_depth / max_depth: validity range for ground-truth LiDAR pixels.
+        eigen_crop: restrict scoring to the standard Eigen evaluation region
+            before the validity mask is applied (see the caveat above).
+    """
+
+    def __init__(self, min_depth=config.DEPTH_MIN, max_depth=config.DEPTH_MAX,
+                 eigen_crop=False):
         self.min_depth = min_depth
         self.max_depth = max_depth
+        self.eigen_crop = eigen_crop
         self.reset()
 
     def reset(self):
@@ -41,6 +72,12 @@ class DepthMetrics:
 
     @torch.no_grad()
     def update(self, predicted, target):
+        if self.eigen_crop:
+            _b, _c, h, w = target.shape
+            r0, r1, c0, c1 = eigen_crop_slice(h, w)
+            predicted = predicted[:, :, r0:r1, c0:c1]
+            target = target[:, :, r0:r1, c0:c1]
+
         mask = valid_mask(target, self.min_depth, self.max_depth)
         if not mask.any():
             return
@@ -89,13 +126,13 @@ class DepthMetrics:
 
 @torch.no_grad()
 def evaluate_depth(model, loader, device, max_batches=None, timesteps=1,
-                   verbose=False):
+                   verbose=False, eigen_crop=False):
     """Run the validation loop and return the metric dict."""
     from models.snn import spiking_forward
 
     was_training = model.training
     model.eval()
-    metrics = DepthMetrics()
+    metrics = DepthMetrics(eigen_crop=eigen_crop)
 
     for i, (images, depths) in enumerate(loader):
         if max_batches is not None and i >= max_batches:
@@ -112,9 +149,11 @@ def evaluate_depth(model, loader, device, max_batches=None, timesteps=1,
 
 
 @torch.no_grad()
-def evaluate_depth_rmse(model, loader, device, max_batches=None):
+def evaluate_depth_rmse(model, loader, device, max_batches=None,
+                        eigen_crop=False):
     """Scalar RMSE -- the objective signature `search_lambda` expects."""
-    return evaluate_depth(model, loader, device, max_batches)['rmse']
+    return evaluate_depth(model, loader, device, max_batches,
+                          eigen_crop=eigen_crop)['rmse']
 
 
 def format_metrics(metrics, prefix=''):

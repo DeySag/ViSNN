@@ -6,6 +6,11 @@
 The MobileNet stages are quantized into binary spikes and frozen; the SSD extra
 layers and the localisation/classification heads stay continuous and are the
 only things trained.
+
+Passing ``--run-dir results/<tag>`` redirects every artifact of the run into
+that directory and additionally writes per-epoch ``metrics.csv``, a
+``config.json`` snapshot and an energy report inside ``summary.json`` --
+the layout the ablation runner expects.
 """
 
 import argparse
@@ -18,6 +23,7 @@ import torch.optim as optim
 
 import config
 import utils
+from calibration.energy import build_energy_report, format_energy_report
 from calibration.lambda_search import measure_spike_rate, search_lambda
 from data.loaders import build_detection_loaders, class_names_of, num_classes_of
 from losses.multibox_loss import MultiBoxLoss
@@ -37,6 +43,9 @@ def parse_args():
     parser.add_argument('--synthetic', action='store_true',
                         help='use generated COCO-shaped data (no download)')
     parser.add_argument('--no-pretrained', action='store_true')
+    parser.add_argument('--no-convert', action='store_true',
+                        help='continuous control: keep the MobileNet stages '
+                             'continuous and train heads/extras on them')
 
     parser.add_argument('--epochs', type=int, default=config.NUM_EPOCHS)
     parser.add_argument('--batch-size', type=int, default=config.BATCH_SIZE)
@@ -62,13 +71,29 @@ def parse_args():
 
     parser.add_argument('--limit-train', type=int, default=None)
     parser.add_argument('--limit-val', type=int, default=None)
-    parser.add_argument('--eval-batches', type=int, default=config.MAX_EVAL_BATCHES)
+    parser.add_argument('--eval-batches', type=int, default=config.MAX_EVAL_BATCHES,
+                        help='validation cap; -1 also means uncapped')
+    parser.add_argument('--full-eval', action='store_true',
+                        help='evaluate the entire validation split (overrides '
+                             '--eval-batches)')
     parser.add_argument('--coco-metrics', action='store_true',
                         help='also report mAP@[.5:.95] (10x slower)')
+    parser.add_argument('--run-dir', default=None,
+                        help="directory for this run's artifacts; also enables "
+                             'metrics.csv / config.json / energy reporting')
     parser.add_argument('--device', default=None)
     parser.add_argument('--seed', type=int, default=config.SEED)
     parser.add_argument('--tag', default='ssd')
     return parser.parse_args()
+
+
+def resolve_eval_batches(args):
+    """--full-eval wins; negative --eval-batches counts as uncapped too."""
+    if args.full_eval:
+        return None
+    if args.eval_batches is None or args.eval_batches < 0:
+        return None
+    return args.eval_batches
 
 
 def forward_split(model, images, timesteps=1):
@@ -142,6 +167,17 @@ def main():
     args = parse_args()
     utils.set_seed(args.seed)
     config.ensure_dirs()
+    eval_batches = resolve_eval_batches(args)
+
+    run_dir = args.run_dir
+    if run_dir:
+        os.makedirs(run_dir, exist_ok=True)
+        with open(os.path.join(run_dir, 'config.json'), 'w',
+                  encoding='utf-8') as handle:
+            json.dump(vars(args), handle, indent=2)
+
+    def out_path(name):
+        return os.path.join(run_dir or config.RESULTS_DIR, name)
 
     device = utils.get_device(args.device)
     print('== Track B: spiking SSD object detection ==')
@@ -160,22 +196,24 @@ def main():
           f'{num_classes - 1} foreground class(es)')
 
     # ---- Calibration and conversion --------------------------------------
-    threshold_path = os.path.join(config.CHECKPOINT_DIR,
-                                  f'{args.tag}_thresholds.npz')
+    threshold_path = (os.path.join(config.CHECKPOINT_DIR,
+                                   f'{args.tag}_thresholds.npz')
+                      if not args.no_convert else None)
     model, _thresholds = build_ssd_pipeline(
         train_loader, device, num_classes=num_classes,
         pretrained=not args.no_pretrained,
         calibration_batches=min(args.calibration_batches, len(train_loader)),
         percentile=args.percentile, crop_margin=args.crop_margin,
         lambda_=args.lambda_, fire_fn=args.fire_fn, timesteps=args.timesteps,
-        n_levels=args.n_levels, threshold_path=threshold_path)
+        n_levels=args.n_levels, threshold_path=threshold_path,
+        convert=not args.no_convert)
 
     if args.search_lambda:
         print('[calibrate] searching lambda...')
         best_lambda, _scores = search_lambda(
             model, val_loader, evaluate_detection_map,
             grid=config.LAMBDA_SEARCH_GRID, device=device, mode='max',
-            max_batches=args.eval_batches)
+            max_batches=eval_batches)
         args.lambda_ = best_lambda
 
     # ---- Training --------------------------------------------------------
@@ -187,80 +225,123 @@ def main():
                              iou_threshold=args.iou_threshold,
                              neg_pos_ratio=args.neg_pos_ratio).to(device)
 
+    csv_writer = None
+    if run_dir:
+        csv_writer = utils.MetricsCSVWriter(
+            os.path.join(run_dir, 'metrics.csv'),
+            ['epoch', 'loss', 'loc_loss', 'cls_loss', 'mAP',
+             'mAP@[.5:.95]', 'num_classes_evaluated', 'seconds', 'best'])
+
     history = {'loss': [], 'loc_loss': [], 'cls_loss': [], 'mAP': []}
     best_map = -1.0
+    best_epoch = 0
+    final_metrics = None
 
-    for epoch in range(1, args.epochs + 1):
-        stats = train_one_epoch(model, train_loader, optimizer, criterion,
-                                device, epoch, timesteps=args.timesteps)
-        scheduler.step()
+    try:
+        for epoch in range(1, args.epochs + 1):
+            stats = train_one_epoch(model, train_loader, optimizer, criterion,
+                                    device, epoch, timesteps=args.timesteps)
+            scheduler.step()
 
-        metrics = evaluate_detection(model, val_loader, device,
-                                     max_batches=args.eval_batches,
-                                     num_classes=num_classes,
-                                     class_names=class_names,
-                                     coco_style=args.coco_metrics)
+            metrics = evaluate_detection(model, val_loader, device,
+                                         max_batches=eval_batches,
+                                         num_classes=num_classes,
+                                         class_names=class_names,
+                                         coco_style=args.coco_metrics)
+            final_metrics = metrics
 
-        history['loss'].append(stats['loss'])
-        history['loc_loss'].append(stats['loc_loss'])
-        history['cls_loss'].append(stats['cls_loss'])
-        history['mAP'].append(metrics['mAP'])
+            history['loss'].append(stats['loss'])
+            history['loc_loss'].append(stats['loc_loss'])
+            history['cls_loss'].append(stats['cls_loss'])
+            history['mAP'].append(metrics['mAP'])
 
-        print(f'epoch {epoch}/{args.epochs}  loss {stats["loss"]:.4f} '
-              f'(loc {stats["loc_loss"]:.4f} / cls {stats["cls_loss"]:.4f})  '
-              f'({stats["seconds"]:.1f}s)')
-        print(f'  val: mAP@0.5 {metrics["mAP"]:.4f} over '
-              f'{metrics["num_classes_evaluated"]} class(es)')
-        if args.coco_metrics:
-            print(f'       mAP@[.5:.95] {metrics["mAP@[.5:.95]"]:.4f}')
+            print(f'epoch {epoch}/{args.epochs}  loss {stats["loss"]:.4f} '
+                  f'(loc {stats["loc_loss"]:.4f} / cls {stats["cls_loss"]:.4f})  '
+                  f'({stats["seconds"]:.1f}s)')
+            print(f'  val: mAP@0.5 {metrics["mAP"]:.4f} over '
+                  f'{metrics["num_classes_evaluated"]} class(es)')
+            if args.coco_metrics:
+                print(f'       mAP@[.5:.95] {metrics["mAP@[.5:.95]"]:.4f}')
 
-        visualize_detection_model(
-            model, val_loader, device,
-            os.path.join(config.RESULTS_DIR,
-                         f'{args.tag}_epoch{epoch:02d}.png'),
-            class_names=class_names,
-            title=f'Epoch {epoch} -- mAP@0.5 {metrics["mAP"]:.3f}')
+            is_best = metrics['mAP'] > best_map
+            if csv_writer:
+                csv_writer.append({
+                    'epoch': epoch,
+                    'loss': f'{stats["loss"]:.6f}',
+                    'loc_loss': f'{stats["loc_loss"]:.6f}',
+                    'cls_loss': f'{stats["cls_loss"]:.6f}',
+                    'mAP': f'{metrics["mAP"]:.6f}',
+                    'mAP@[.5:.95]': (
+                        f'{metrics["mAP@[.5:.95]"]:.6f}'
+                        if 'mAP@[.5:.95]' in metrics else ''),
+                    'num_classes_evaluated':
+                        metrics.get('num_classes_evaluated', ''),
+                    'seconds': f'{stats["seconds"]:.3f}',
+                    'best': int(is_best),
+                })
 
-        if metrics['mAP'] > best_map:
-            best_map = metrics['mAP']
-            utils.save_checkpoint({
-                'epoch': epoch,
-                'heads_state': model.heads.state_dict(),
-                'extras_state': {
-                    'extra1': model.backbone.extra1.state_dict(),
-                    'extra2': model.backbone.extra2.state_dict(),
-                    'extra3': model.backbone.extra3.state_dict(),
-                },
-                'metrics': {k: v for k, v in metrics.items()
-                            if k != 'per_class'},
-                'args': vars(args),
-            }, f'{args.tag}_best.pt')
-            print(f'  new best mAP {best_map:.4f} -> checkpoint saved')
+            visualize_detection_model(
+                model, val_loader, device, out_path(
+                    f'{args.tag}_epoch{epoch:02d}.png'),
+                class_names=class_names,
+                title=f'Epoch {epoch} -- mAP@0.5 {metrics["mAP"]:.3f}')
+
+            if is_best:
+                best_map = metrics['mAP']
+                best_epoch = epoch
+                utils.save_checkpoint({
+                    'epoch': epoch,
+                    'heads_state': model.heads.state_dict(),
+                    'extras_state': {
+                        'extra1': model.backbone.extra1.state_dict(),
+                        'extra2': model.backbone.extra2.state_dict(),
+                        'extra3': model.backbone.extra3.state_dict(),
+                    },
+                    'metrics': {k: v for k, v in metrics.items()
+                                if k != 'per_class'},
+                    'args': vars(args),
+                }, f'{args.tag}_best.pt')
+                print(f'  new best mAP {best_map:.4f} -> checkpoint saved')
+    finally:
+        if csv_writer:
+            csv_writer.close()
 
     # ---- Reporting -------------------------------------------------------
-    plot_curves(history, os.path.join(config.RESULTS_DIR,
-                                      f'{args.tag}_curves.png'),
+    plot_curves(history, out_path(f'{args.tag}_curves.png'),
                 title='Track B -- spiking SSD detection')
 
     reset_spiking_state(model.backbone)
     spike = measure_spike_rate(model, val_loader, device, max_batches=3)
-    plot_spike_rates(spike, os.path.join(config.RESULTS_DIR,
-                                         f'{args.tag}_spike_rates.png'))
+    plot_spike_rates(spike, out_path(f'{args.tag}_spike_rates.png'))
     set_spike_tracking(model, enabled=False)
 
     summary = {
+        'track': 'ssd',
         'best_val_mAP': best_map,
+        'best_epoch': best_epoch,
         'overall_spike_rate': spike['overall'],
         'history': history,
         'args': vars(args),
+        # Full metric suite from the final epoch (aggregate.py reads these).
+        'final_metrics': ({k: v for k, v in final_metrics.items()
+                           if k != 'per_class'} if final_metrics else None),
     }
-    summary_path = os.path.join(config.RESULTS_DIR, f'{args.tag}_summary.json')
+
+    energy = build_energy_report(model.backbone, val_loader, device,
+                                 input_size=config.INPUT_SIZE,
+                                 max_batches=3, timesteps=args.timesteps,
+                                 batch_size=args.batch_size)
+    summary['energy'] = energy
+
+    summary_path = out_path('summary.json' if run_dir
+                            else f'{args.tag}_summary.json')
     with open(summary_path, 'w', encoding='utf-8') as handle:
         json.dump(summary, handle, indent=2)
 
-    print(f'\nbest val mAP@0.5: {best_map:.4f}')
+    print(f'\nbest val mAP@0.5: {best_map:.4f} (epoch {best_epoch})')
     print(f'overall spike rate: {spike["overall"]:.4f}')
-    print(f'artifacts -> {config.RESULTS_DIR}')
+    print(format_energy_report(energy))
+    print(f'artifacts -> {os.path.dirname(summary_path)}')
 
 
 if __name__ == '__main__':
