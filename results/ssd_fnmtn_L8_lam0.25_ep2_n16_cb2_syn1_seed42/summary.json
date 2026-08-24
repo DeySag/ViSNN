@@ -1,0 +1,296 @@
+{
+  "track": "ssd",
+  "best_val_mAP": 0.01437908496732026,
+  "best_epoch": 1,
+  "overall_spike_rate": 0.4786607945373835,
+  "history": {
+    "loss": [
+      8.722407341003418,
+      8.130921363830566
+    ],
+    "loc_loss": [
+      3.3594921827316284,
+      3.2305692434310913
+    ],
+    "cls_loss": [
+      5.362915277481079,
+      4.900352239608765
+    ],
+    "mAP": [
+      0.01437908496732026,
+      0.012858141160027953
+    ]
+  },
+  "args": {
+    "data_root": "C:\\Users\\sagni\\Desktop\\ViSNN\\datasets\\coco",
+    "synthetic": true,
+    "no_pretrained": false,
+    "no_convert": false,
+    "epochs": 2,
+    "batch_size": 8,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "num_workers": 0,
+    "neg_pos_ratio": 3,
+    "iou_threshold": 0.5,
+    "timesteps": 1,
+    "fire_fn": "mtn",
+    "lambda_": 0.25,
+    "n_levels": 8,
+    "search_lambda": false,
+    "calibration_batches": 2,
+    "percentile": 99.0,
+    "crop_margin": 2,
+    "limit_train": 16,
+    "limit_val": 8,
+    "eval_batches": 2,
+    "full_eval": false,
+    "coco_metrics": false,
+    "run_dir": "C:\\Users\\sagni\\Desktop\\ViSNN\\results\\ssd_fnmtn_L8_lam0.25_ep2_n16_cb2_syn1_seed42",
+    "device": null,
+    "seed": 42,
+    "tag": "ssd_fnmtn_L8_lam0.25_ep2_n16_cb2_syn1_seed42"
+  },
+  "final_metrics": {
+    "mAP": 0.012858141160027953,
+    "num_classes_evaluated": 3,
+    "iou_threshold": 0.5
+  },
+  "energy": {
+    "input_size": 224,
+    "synaptic_ops": {
+      "frames": 8,
+      "timesteps": 1,
+      "total_spikes": 23380826.0,
+      "spikes_per_frame": 2922603.25,
+      "overall_spike_rate": 0.4786607945373835,
+      "num_spiking_layers": 35,
+      "total_sops": 2943410217.0,
+      "sops_per_frame": 367926277.125,
+      "layers": {
+        "stage1.0.2": {
+          "spikes": 1833480.0,
+          "spike_rate": 0.5709527463329082,
+          "fan_out": 9.0,
+          "sops": 16501320.0
+        },
+        "stage1.1.conv.0.2": {
+          "spikes": 2231196.0,
+          "spike_rate": 0.6948030432876275,
+          "fan_out": 48.0,
+          "sops": 107097408.0
+        },
+        "stage1.2.conv.0.2": {
+          "spikes": 5688282.0,
+          "spike_rate": 0.5904509875239158,
+          "fan_out": 9.0,
+          "sops": 51194538.0
+        },
+        "stage1.2.conv.1.2": {
+          "spikes": 1065913.0,
+          "spike_rate": 0.4425725612510629,
+          "fan_out": 120.0,
+          "sops": 127909560.0
+        },
+        "stage1.3.conv.0.2": {
+          "spikes": 2035949.0,
+          "spike_rate": 0.5635576659049036,
+          "fan_out": 9.0,
+          "sops": 18323541.0
+        },
+        "stage1.3.conv.1.2": {
+          "spikes": 1072901.0,
+          "spike_rate": 0.29698267653415533,
+          "fan_out": 168.0,
+          "sops": 180247368.0
+        },
+        "stage1.4.conv.0.2": {
+          "spikes": 1642990.0,
+          "spike_rate": 0.4547852669713719,
+          "fan_out": 9.0,
+          "sops": 14786910.0
+        },
+        "stage1.4.conv.1.2": {
+          "spikes": 429326.0,
+          "spike_rate": 0.47535563704648526,
+          "fan_out": 176.0,
+          "sops": 75561376.0
+        },
+        "stage1.5.conv.0.2": {
+          "spikes": 770272.0,
+          "spike_rate": 0.6396417942176871,
+          "fan_out": 9.0,
+          "sops": 6932448.0
+        },
+        "stage1.5.conv.1.2": {
+          "spikes": 363233.0,
+          "spike_rate": 0.30163242054634354,
+          "fan_out": 224.0,
+          "sops": 81364192.0
+        },
+        "stage1.6.conv.0.2": {
+          "spikes": 511916.0,
+          "spike_rate": 0.42510031356292516,
+          "fan_out": 9.0,
+          "sops": 4607244.0
+        },
+        "stage1.6.conv.1.2": {
+          "spikes": 297722.0,
+          "spike_rate": 0.24723141209608843,
+          "fan_out": 224.0,
+          "sops": 66689728.0
+        },
+        "stage1.7.conv.0.2": {
+          "spikes": 430971.0,
+          "spike_rate": 0.35788275271045916,
+          "fan_out": 9.0,
+          "sops": 3878739.0
+        },
+        "stage1.7.conv.1.2": {
+          "spikes": 175673.0,
+          "spike_rate": 0.5835226668792517,
+          "fan_out": 256.0,
+          "sops": 44972288.0
+        },
+        "stage1.8.conv.0.2": {
+          "spikes": 349099.0,
+          "spike_rate": 0.579790803039966,
+          "fan_out": 9.0,
+          "sops": 3141891.0
+        },
+        "stage1.8.conv.1.2": {
+          "spikes": 178098.0,
+          "spike_rate": 0.29578882334183676,
+          "fan_out": 448.0,
+          "sops": 79787904.0
+        },
+        "stage1.9.conv.0.2": {
+          "spikes": 312330.0,
+          "spike_rate": 0.5187240911989796,
+          "fan_out": 9.0,
+          "sops": 2810970.0
+        },
+        "stage1.9.conv.1.2": {
+          "spikes": 227103.0,
+          "spike_rate": 0.37717733577806123,
+          "fan_out": 448.0,
+          "sops": 101742144.0
+        },
+        "stage1.10.conv.0.2": {
+          "spikes": 283155.0,
+          "spike_rate": 0.4702696508290816,
+          "fan_out": 9.0,
+          "sops": 2548395.0
+        },
+        "stage1.10.conv.1.2": {
+          "spikes": 239856.0,
+          "spike_rate": 0.3983577806122449,
+          "fan_out": 448.0,
+          "sops": 107455488.0
+        },
+        "stage1.11.conv.0.2": {
+          "spikes": 243446.0,
+          "spike_rate": 0.40432012648809523,
+          "fan_out": 9.0,
+          "sops": 2191014.0
+        },
+        "stage1.11.conv.1.2": {
+          "spikes": 251553.0,
+          "spike_rate": 0.4177843989158163,
+          "fan_out": 480.0,
+          "sops": 120745440.0
+        },
+        "stage1.12.conv.0.2": {
+          "spikes": 356269.0,
+          "spike_rate": 0.3944659243905896,
+          "fan_out": 9.0,
+          "sops": 3206421.0
+        },
+        "stage1.12.conv.1.2": {
+          "spikes": 317253.0,
+          "spike_rate": 0.35126687393707484,
+          "fan_out": 672.0,
+          "sops": 213194016.0
+        },
+        "stage1.13.conv.0.2": {
+          "spikes": 350917.0,
+          "spike_rate": 0.3885401165674603,
+          "fan_out": 9.0,
+          "sops": 3158253.0
+        },
+        "stage1.13.conv.1.2": {
+          "spikes": 338467.0,
+          "spike_rate": 0.3747553057681406,
+          "fan_out": 672.0,
+          "sops": 227449824.0
+        },
+        "stage2.0.conv.0.2": {
+          "spikes": 223257.0,
+          "spike_rate": 0.24719321322278912,
+          "fan_out": 9.0,
+          "sops": 2009313.0
+        },
+        "stage2.0.conv.1.2": {
+          "spikes": 129739.0,
+          "spike_rate": 0.5745952026643991,
+          "fan_out": 736.0,
+          "sops": 95487904.0
+        },
+        "stage2.1.conv.0.2": {
+          "spikes": 162394.0,
+          "spike_rate": 0.431531675170068,
+          "fan_out": 9.0,
+          "sops": 1461546.0
+        },
+        "stage2.1.conv.1.2": {
+          "spikes": 146541.0,
+          "spike_rate": 0.3894052933673469,
+          "fan_out": 1120.0,
+          "sops": 164125920.0
+        },
+        "stage2.2.conv.0.2": {
+          "spikes": 151284.0,
+          "spike_rate": 0.40200892857142856,
+          "fan_out": 9.0,
+          "sops": 1361556.0
+        },
+        "stage2.2.conv.1.2": {
+          "spikes": 155753.0,
+          "spike_rate": 0.4138844600340136,
+          "fan_out": 1120.0,
+          "sops": 174443360.0
+        },
+        "stage2.3.conv.0.2": {
+          "spikes": 50886.0,
+          "spike_rate": 0.1352200255102041,
+          "fan_out": 9.0,
+          "sops": 457974.0
+        },
+        "stage2.3.conv.1.2": {
+          "spikes": 294563.0,
+          "spike_rate": 0.7827460671768708,
+          "fan_out": 1280.0,
+          "sops": 377040640.0
+        },
+        "stage2.4.2": {
+          "spikes": 69039.0,
+          "spike_rate": 0.13759367028061226,
+          "fan_out": 6656.0,
+          "sops": 459523584.0
+        }
+      }
+    },
+    "ann_macs_per_frame": 337079168.0,
+    "mac_equivalent_ratio": 0.9161595378127343,
+    "latency_ms": {
+      "snn_T1": 1083.370807999745
+    },
+    "energy": {
+      "ann_mac_pj": 4.6,
+      "sop_pj": 1.0,
+      "ann_joules_per_frame": 0.0015505641728,
+      "snn_joules_per_frame": 0.000367926277125,
+      "energy_ratio_ann_over_snn": 4.214333873938577
+    }
+  }
+}

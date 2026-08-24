@@ -1,0 +1,90 @@
+{
+  "track": "depth",
+  "best_val_rmse": 29.17418169075009,
+  "best_epoch": 1,
+  "overall_spike_rate": 0.0,
+  "history": {
+    "loss": [
+      28.418355464935303
+    ],
+    "train_rmse": [
+      28.41773796081543
+    ],
+    "val_rmse": [
+      29.17418169075009
+    ],
+    "delta1": [
+      0.005250169761009622
+    ]
+  },
+  "args": {
+    "data_root": "C:\\Users\\sagni\\Desktop\\ViSNN\\datasets\\kitti",
+    "synthetic": true,
+    "backbone": "mobilenet_v2",
+    "no_pretrained": false,
+    "spatial_mode": "crop",
+    "output_activation": "relu",
+    "no_convert": true,
+    "epochs": 1,
+    "batch_size": 8,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "alpha": 0.1,
+    "gradient_mode": "smoothness",
+    "num_workers": 0,
+    "timesteps": 1,
+    "fire_fn": "binary",
+    "lambda_": 1.0,
+    "n_levels": 8,
+    "search_lambda": false,
+    "calibration_batches": 20,
+    "percentile": 99.0,
+    "crop_margin": 2,
+    "eigen_crop": false,
+    "limit_train": 32,
+    "limit_val": 16,
+    "eval_batches": 4,
+    "full_eval": false,
+    "run_dir": "C:\\Users\\sagni\\Desktop\\ViSNN\\results\\depth_cont_ep1_n32_syn1_seed42",
+    "device": null,
+    "seed": 42,
+    "tag": "depth_cont_ep1_n32_syn1_seed42"
+  },
+  "final_metrics": {
+    "rmse": 29.17418169075009,
+    "rmse_log": 1.8403524081330191,
+    "mae": 27.603115321552195,
+    "abs_rel": 0.8268640522263535,
+    "sq_rel": 23.395595943954024,
+    "delta1": 0.005250169761009622,
+    "delta2": 0.005275012835588532,
+    "delta3": 0.005275012835588532,
+    "num_pixels": 120758.0
+  },
+  "energy": {
+    "input_size": 224,
+    "synaptic_ops": {
+      "frames": 16,
+      "timesteps": 1,
+      "total_spikes": 0,
+      "spikes_per_frame": 0.0,
+      "overall_spike_rate": 0.0,
+      "num_spiking_layers": 0,
+      "total_sops": 0,
+      "sops_per_frame": 0.0,
+      "layers": {}
+    },
+    "ann_macs_per_frame": 299494272.0,
+    "mac_equivalent_ratio": 299494272.0,
+    "latency_ms": {
+      "snn_T1": 387.01547800097615
+    },
+    "energy": {
+      "ann_mac_pj": 4.6,
+      "sop_pj": 1.0,
+      "ann_joules_per_frame": 0.0013776736511999998,
+      "snn_joules_per_frame": 0.0,
+      "energy_ratio_ann_over_snn": NaN
+    }
+  }
+}

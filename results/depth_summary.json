@@ -1,0 +1,47 @@
+{
+  "best_val_rmse": 29.24484507859246,
+  "overall_spike_rate": 0.053270361977610765,
+  "history": {
+    "loss": [
+      28.493678092956543
+    ],
+    "train_rmse": [
+      28.493678092956543
+    ],
+    "val_rmse": [
+      29.24484507859246
+    ],
+    "delta1": [
+      0.021211414871299655
+    ]
+  },
+  "args": {
+    "data_root": "C:\\Users\\sagni\\project-1\\datasets\\kitti",
+    "synthetic": true,
+    "backbone": "mobilenet_v2",
+    "no_pretrained": true,
+    "spatial_mode": "crop",
+    "output_activation": "relu",
+    "epochs": 1,
+    "batch_size": 4,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "alpha": 0.1,
+    "gradient_mode": "smoothness",
+    "num_workers": 0,
+    "timesteps": 3,
+    "fire_fn": "mtn",
+    "lambda_": 0.25,
+    "n_levels": 8,
+    "search_lambda": false,
+    "calibration_batches": 2,
+    "percentile": 99.0,
+    "crop_margin": 2,
+    "limit_train": 16,
+    "limit_val": 4,
+    "eval_batches": 2,
+    "device": null,
+    "seed": 42,
+    "tag": "depth"
+  }
+}

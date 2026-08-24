@@ -1,0 +1,45 @@
+{
+  "best_val_mAP": 0.0,
+  "overall_spike_rate": 0.20469105400249468,
+  "history": {
+    "loss": [
+      7.643544673919678
+    ],
+    "loc_loss": [
+      2.929170072078705
+    ],
+    "cls_loss": [
+      4.714374661445618
+    ],
+    "mAP": [
+      0.0
+    ]
+  },
+  "args": {
+    "data_root": "C:\\Users\\sagni\\project-1\\datasets\\coco",
+    "synthetic": true,
+    "no_pretrained": true,
+    "epochs": 1,
+    "batch_size": 4,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "num_workers": 0,
+    "neg_pos_ratio": 3,
+    "iou_threshold": 0.5,
+    "timesteps": 1,
+    "fire_fn": "mtn",
+    "lambda_": 0.1,
+    "n_levels": 8,
+    "search_lambda": true,
+    "calibration_batches": 2,
+    "percentile": 99.0,
+    "crop_margin": 2,
+    "limit_train": 16,
+    "limit_val": 4,
+    "eval_batches": 2,
+    "coco_metrics": false,
+    "device": null,
+    "seed": 42,
+    "tag": "ssd"
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "created": "2026-08-25T00:59:36",
+  "entries": [
+    {
+      "tag": "depth_fnmtn_L8_lam0.1_ep1_n16_cb2_syn1_seed42",
+      "track": "depth",
+      "seed": 42,
+      "cfg": {
+        "fire_fn": "mtn",
+        "n_levels": 8,
+        "limit_train": 16,
+        "epochs": 1,
+        "lambda": 0.1,
+        "synthetic": true,
+        "eval_batches": 2,
+        "calibration_batches": 2,
+        "batch_size": 8,
+        "num_workers": 0
+      }
+    },
+    {
+      "tag": "depth_fnmtn_L8_lam0.25_ep1_n16_cb2_syn1_seed42",
+      "track": "depth",
+      "seed": 42,
+      "cfg": {
+        "fire_fn": "mtn",
+        "n_levels": 8,
+        "limit_train": 16,
+        "epochs": 1,
+        "lambda": 0.25,
+        "synthetic": true,
+        "eval_batches": 2,
+        "calibration_batches": 2,
+        "batch_size": 8,
+        "num_workers": 0
+      }
+    },
+    {
+      "tag": "depth_fnmtn_L8_lam0.5_ep1_n16_cb2_syn1_seed42",
+      "track": "depth",
+      "seed": 42,
+      "cfg": {
+        "fire_fn": "mtn",
+        "n_levels": 8,
+        "limit_train": 16,
+        "epochs": 1,
+        "lambda": 0.5,
+        "synthetic": true,
+        "eval_batches": 2,
+        "calibration_batches": 2,
+        "batch_size": 8,
+        "num_workers": 0
+      }
+    },
+    {
+      "tag": "depth_fnmtn_L8_lam0.75_ep1_n16_cb2_syn1_seed42",
+      "track": "depth",
+      "seed": 42,
+      "cfg": {
+        "fire_fn": "mtn",
+        "n_levels": 8,
+        "limit_train": 16,
+        "epochs": 1,
+        "lambda": 0.75,
+        "synthetic": true,
+        "eval_batches": 2,
+        "calibration_batches": 2,
+        "batch_size": 8,
+        "num_workers": 0
+      }
+    },
+    {
+      "tag": "depth_fnmtn_L8_lam1_ep1_n16_cb2_syn1_seed42",
+      "track": "depth",
+      "seed": 42,
+      "cfg": {
+        "fire_fn": "mtn",
+        "n_levels": 8,
+        "limit_train": 16,
+        "epochs": 1,
+        "lambda": 1.0,
+        "synthetic": true,
+        "eval_batches": 2,
+        "calibration_batches": 2,
+        "batch_size": 8,
+        "num_workers": 0
+      }
+    }
+  ]
+}

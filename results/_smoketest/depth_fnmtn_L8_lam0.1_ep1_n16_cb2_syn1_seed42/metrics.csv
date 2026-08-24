@@ -1,0 +1,2 @@
+epoch,loss,train_rmse,val_rmse,val_abs_rel,val_delta1,seconds,best
+1,28.457425,28.456244,29.256852,0.829281,0.005275,5.066,1

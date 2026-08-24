@@ -1,0 +1,302 @@
+{
+  "track": "depth",
+  "best_val_rmse": 29.36999426719906,
+  "best_epoch": 1,
+  "overall_spike_rate": 0.5430521953581124,
+  "history": {
+    "loss": [
+      28.71504306793213
+    ],
+    "train_rmse": [
+      28.714024543762207
+    ],
+    "val_rmse": [
+      29.36999426719906
+    ],
+    "delta1": [
+      0.010545310068536238
+    ]
+  },
+  "args": {
+    "data_root": "C:\\Users\\sagni\\Desktop\\ViSNN\\datasets\\kitti",
+    "synthetic": true,
+    "backbone": "mobilenet_v2",
+    "no_pretrained": false,
+    "spatial_mode": "crop",
+    "output_activation": "relu",
+    "no_convert": false,
+    "epochs": 1,
+    "batch_size": 4,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "alpha": 0.1,
+    "gradient_mode": "smoothness",
+    "num_workers": 0,
+    "timesteps": 2,
+    "fire_fn": "mtn",
+    "lambda_": 0.25,
+    "n_levels": 8,
+    "search_lambda": false,
+    "calibration_batches": 2,
+    "percentile": 99.0,
+    "crop_margin": 2,
+    "eigen_crop": false,
+    "limit_train": 8,
+    "limit_val": 8,
+    "eval_batches": 2,
+    "full_eval": false,
+    "run_dir": "results\\_smoketest\\depth_fnmtn_L8_T2_lam0.25_ep1_n8_cb2_syn1_seed42",
+    "device": null,
+    "seed": 42,
+    "tag": "depth_fnmtn_L8_T2_lam0.25_ep1_n8_cb2_syn1_seed42"
+  },
+  "final_metrics": {
+    "rmse": 29.36999426719906,
+    "rmse_log": 1.8884994168134932,
+    "mae": 27.74364301559448,
+    "abs_rel": 0.832054109639357,
+    "sq_rel": 23.724655870277786,
+    "delta1": 0.010545310068536238,
+    "delta2": 0.010545310068536238,
+    "delta3": 0.010545310068536238,
+    "num_pixels": 60406.0
+  },
+  "energy": {
+    "input_size": 224,
+    "synaptic_ops": {
+      "frames": 8,
+      "timesteps": 2,
+      "total_spikes": 53076017.0,
+      "spikes_per_frame": 6634502.125,
+      "overall_spike_rate": 0.5432957857883138,
+      "num_spiking_layers": 35,
+      "total_sops": 22576778020.0,
+      "sops_per_frame": 2822097252.5,
+      "layers": {
+        "features.0.2": {
+          "spikes": 3615937.0,
+          "spike_rate": 0.563008366798868,
+          "fan_out": 36.0,
+          "sops": 130173732.0
+        },
+        "features.1.conv.0.2": {
+          "spikes": 4488102.0,
+          "spike_rate": 0.6988061398875957,
+          "fan_out": 192.0,
+          "sops": 861715584.0
+        },
+        "features.2.conv.0.2": {
+          "spikes": 11722061.0,
+          "spike_rate": 0.6083825040025775,
+          "fan_out": 36.0,
+          "sops": 421994196.0
+        },
+        "features.2.conv.1.2": {
+          "spikes": 2681768.0,
+          "spike_rate": 0.5567419350552721,
+          "fan_out": 480.0,
+          "sops": 1287248640.0
+        },
+        "features.3.conv.0.2": {
+          "spikes": 4764916.0,
+          "spike_rate": 0.6594725455286281,
+          "fan_out": 36.0,
+          "sops": 171536976.0
+        },
+        "features.3.conv.1.2": {
+          "spikes": 3214040.0,
+          "spike_rate": 0.4448286476048753,
+          "fan_out": 672.0,
+          "sops": 2159834880.0
+        },
+        "features.4.conv.0.2": {
+          "spikes": 3855560.0,
+          "spike_rate": 0.5336161157171202,
+          "fan_out": 36.0,
+          "sops": 138800160.0
+        },
+        "features.4.conv.1.2": {
+          "spikes": 935009.0,
+          "spike_rate": 0.5176273960104876,
+          "fan_out": 704.0,
+          "sops": 658246336.0
+        },
+        "features.5.conv.0.2": {
+          "spikes": 1761153.0,
+          "spike_rate": 0.7312397859534439,
+          "fan_out": 36.0,
+          "sops": 63401508.0
+        },
+        "features.5.conv.1.2": {
+          "spikes": 751729.0,
+          "spike_rate": 0.31212174811330784,
+          "fan_out": 896.0,
+          "sops": 673549184.0
+        },
+        "features.6.conv.0.2": {
+          "spikes": 1521731.0,
+          "spike_rate": 0.6318305398331208,
+          "fan_out": 36.0,
+          "sops": 54782316.0
+        },
+        "features.6.conv.1.2": {
+          "spikes": 682375.0,
+          "spike_rate": 0.28332561051764454,
+          "fan_out": 896.0,
+          "sops": 611408000.0
+        },
+        "features.7.conv.0.2": {
+          "spikes": 1253419.0,
+          "spike_rate": 0.5204260170865221,
+          "fan_out": 36.0,
+          "sops": 45123084.0
+        },
+        "features.7.conv.1.2": {
+          "spikes": 401039.0,
+          "spike_rate": 0.6660538238732994,
+          "fan_out": 1024.0,
+          "sops": 410663936.0
+        },
+        "features.8.conv.0.2": {
+          "spikes": 859369.0,
+          "spike_rate": 0.7136288597470238,
+          "fan_out": 36.0,
+          "sops": 30937284.0
+        },
+        "features.8.conv.1.2": {
+          "spikes": 410304.0,
+          "spike_rate": 0.34072066326530615,
+          "fan_out": 1792.0,
+          "sops": 735264768.0
+        },
+        "features.9.conv.0.2": {
+          "spikes": 751728.0,
+          "spike_rate": 0.6242426658163265,
+          "fan_out": 36.0,
+          "sops": 27062208.0
+        },
+        "features.9.conv.1.2": {
+          "spikes": 473368.0,
+          "spike_rate": 0.39308965773809523,
+          "fan_out": 1792.0,
+          "sops": 848275456.0
+        },
+        "features.10.conv.0.2": {
+          "spikes": 698616.0,
+          "spike_rate": 0.5801379145408163,
+          "fan_out": 36.0,
+          "sops": 25150176.0
+        },
+        "features.10.conv.1.2": {
+          "spikes": 486120.0,
+          "spike_rate": 0.40367904974489793,
+          "fan_out": 1792.0,
+          "sops": 871127040.0
+        },
+        "features.11.conv.0.2": {
+          "spikes": 586625.0,
+          "spike_rate": 0.487139435852466,
+          "fan_out": 36.0,
+          "sops": 21118500.0
+        },
+        "features.11.conv.1.2": {
+          "spikes": 533688.0,
+          "spike_rate": 0.443180006377551,
+          "fan_out": 1920.0,
+          "sops": 1024680960.0
+        },
+        "features.12.conv.0.2": {
+          "spikes": 801888.0,
+          "spike_rate": 0.44393069727891155,
+          "fan_out": 36.0,
+          "sops": 28867968.0
+        },
+        "features.12.conv.1.2": {
+          "spikes": 692288.0,
+          "spike_rate": 0.38325538548752835,
+          "fan_out": 2688.0,
+          "sops": 1860870144.0
+        },
+        "features.13.conv.0.2": {
+          "spikes": 864152.0,
+          "spike_rate": 0.47840047477324266,
+          "fan_out": 36.0,
+          "sops": 31109472.0
+        },
+        "features.13.conv.1.2": {
+          "spikes": 715256.0,
+          "spike_rate": 0.3959706278344671,
+          "fan_out": 2688.0,
+          "sops": 1922608128.0
+        },
+        "features.14.conv.0.2": {
+          "spikes": 424480.0,
+          "spike_rate": 0.23499503968253968,
+          "fan_out": 36.0,
+          "sops": 15281280.0
+        },
+        "features.14.conv.1.2": {
+          "spikes": 304920.0,
+          "spike_rate": 0.6752232142857143,
+          "fan_out": 2944.0,
+          "sops": 897684480.0
+        },
+        "features.15.conv.0.2": {
+          "spikes": 443624.0,
+          "spike_rate": 0.5894238945578232,
+          "fan_out": 36.0,
+          "sops": 15970464.0
+        },
+        "features.15.conv.1.2": {
+          "spikes": 304776.0,
+          "spike_rate": 0.40494260204081634,
+          "fan_out": 4480.0,
+          "sops": 1365396480.0
+        },
+        "features.16.conv.0.2": {
+          "spikes": 400144.0,
+          "spike_rate": 0.5316539115646258,
+          "fan_out": 36.0,
+          "sops": 14405184.0
+        },
+        "features.16.conv.1.2": {
+          "spikes": 331144.0,
+          "spike_rate": 0.4399766156462585,
+          "fan_out": 4480.0,
+          "sops": 1483525120.0
+        },
+        "features.17.conv.0.2": {
+          "spikes": 225496.0,
+          "spike_rate": 0.2996067176870748,
+          "fan_out": 36.0,
+          "sops": 8117856.0
+        },
+        "features.17.conv.1.2": {
+          "spikes": 708512.0,
+          "spike_rate": 0.9413690476190476,
+          "fan_out": 5120.0,
+          "sops": 3627581440.0
+        },
+        "features.18.2": {
+          "spikes": 410680.0,
+          "spike_rate": 0.4092394770408163,
+          "fan_out": 81.0,
+          "sops": 33265080.0
+        }
+      }
+    },
+    "ann_macs_per_frame": 299494272.0,
+    "mac_equivalent_ratio": 0.10612471690502098,
+    "latency_ms": {
+      "snn_T1": 380.7415180001408,
+      "snn_T2": 701.6086519975215
+    },
+    "energy": {
+      "ann_mac_pj": 4.6,
+      "sop_pj": 1.0,
+      "ann_joules_per_frame": 0.0013776736511999998,
+      "snn_joules_per_frame": 0.0028220972525,
+      "energy_ratio_ann_over_snn": 0.4881736977630964
+    }
+  }
+}
