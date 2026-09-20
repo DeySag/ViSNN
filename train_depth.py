@@ -105,7 +105,7 @@ def resolve_eval_batches(args):
 
 def train_one_epoch(model, loader, optimizer, criterion, device, epoch,
                     timesteps=1, grad_clip=config.GRAD_CLIP,
-                    log_interval=config.LOG_INTERVAL):
+                    log_interval=config.LOG_INTERVAL, loss_type='silog'):
     """One pass over the training set. Only the decoder receives gradients."""
     model.train()          # the encoder is pinned to eval() by the override
     loss_meter = utils.AverageMeter()
@@ -147,7 +147,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch,
         rmse_meter.update(train_rmse, batch_size)
 
         if log_interval and (step + 1) % log_interval == 0:
-            base_key = 'silog' if args.loss_type == 'silog' else 'rmse'
+            base_key = 'silog' if loss_type == 'silog' else 'rmse'
             base_val = parts.get(base_key, parts.get('rmse', torch.tensor(float('nan'))))
             print(f'  epoch {epoch} [{step + 1}/{len(loader)}]  '
                   f'loss {loss_meter.avg:.4f}  {base_key} {base_val.item():.4f}  '
@@ -237,7 +237,8 @@ def main():
     try:
         for epoch in range(1, args.epochs + 1):
             stats = train_one_epoch(model, train_loader, optimizer, criterion,
-                                    device, epoch, timesteps=args.timesteps)
+                                    device, epoch, timesteps=args.timesteps,
+                                    loss_type=args.loss_type)
             scheduler.step()
 
             metrics = evaluate_depth(model, val_loader, device,
