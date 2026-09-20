@@ -103,12 +103,15 @@ GRAD_CLIP = 5.0
 # SSD (Track B)
 # ----------------------------------------------------------------------------
 NUM_CLASSES = 81            # 80 COCO categories + background at index 0
-SSD_NEG_POS_RATIO = 3       # hard-negative mining ratio
 SSD_IOU_THRESHOLD = 0.5     # prior <-> ground-truth matching threshold
 SSD_LOC_VARIANCES = (0.1, 0.2)
 SSD_SCORE_THRESHOLD = 0.01  # detection score floor at inference
 SSD_NMS_THRESHOLD = 0.45
 SSD_TOP_K = 200
+
+# Focal Loss (replaces hard-negative mining + CE)
+FOCAL_ALPHA = 0.25          # class weight for background vs foreground
+FOCAL_GAMMA = 2.0           # focusing parameter (down-weights easy examples)
 
 # ----------------------------------------------------------------------------
 # Evaluation / logging

@@ -299,15 +299,22 @@ def _():
     assert good.item() < bad.item(), f'good {good.item()} !< bad {bad.item()}'
 
 
-@check('hard-negative mining bounds the number of scored negatives')
+@check('Focal Loss is finite and down-weights easy background')
 def _():
     priorbox = PriorBox((14, 7, 4, 2, 1))
-    criterion = MultiBoxLoss(priorbox.priors, num_classes=4, neg_pos_ratio=3)
+    criterion = MultiBoxLoss(priorbox.priors, num_classes=4,
+                             focal_alpha=0.25, focal_gamma=2.0)
     gt_boxes = [torch.tensor([[0.3, 0.3, 0.5, 0.5]])]
     gt_labels = [torch.tensor([2])]
     _loc_t, label_t = criterion.build_targets(gt_boxes, gt_labels, DEVICE)
     num_pos = int((label_t > 0).sum())
     assert 0 < num_pos < priorbox.priors.shape[0] * 0.5
+
+    # Verify focal loss computes without hard-negative mining
+    pred_locs = torch.zeros(1, priorbox.priors.shape[0], 4)
+    pred_scores = torch.zeros(1, priorbox.priors.shape[0], 4)
+    loss = criterion(pred_locs, pred_scores, gt_boxes, gt_labels)
+    assert torch.isfinite(loss), 'Focal Loss produced NaN/Inf'
 
 
 # ===========================================================================

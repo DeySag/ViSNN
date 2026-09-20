@@ -52,10 +52,12 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=config.LR)
     parser.add_argument('--weight-decay', type=float, default=config.WEIGHT_DECAY)
     parser.add_argument('--num-workers', type=int, default=config.NUM_WORKERS)
-    parser.add_argument('--neg-pos-ratio', type=int,
-                        default=config.SSD_NEG_POS_RATIO)
     parser.add_argument('--iou-threshold', type=float,
                         default=config.SSD_IOU_THRESHOLD)
+    parser.add_argument('--focal-alpha', type=float, default=0.25,
+                        help='Focal Loss alpha (class weight for background)')
+    parser.add_argument('--focal-gamma', type=float, default=2.0,
+                        help='Focal Loss gamma (focusing parameter)')
 
     parser.add_argument('--timesteps', type=int, default=config.TIMESTEPS)
     parser.add_argument('--fire-fn', default=config.FIRE_FN,
@@ -223,7 +225,8 @@ def main():
         optimizer, T_max=max(args.epochs, 1))
     criterion = MultiBoxLoss(model.priors, num_classes=num_classes,
                              iou_threshold=args.iou_threshold,
-                             neg_pos_ratio=args.neg_pos_ratio).to(device)
+                             focal_alpha=args.focal_alpha,
+                             focal_gamma=args.focal_gamma).to(device)
 
     csv_writer = None
     if run_dir:

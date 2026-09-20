@@ -1,4 +1,4 @@
-"""Depth loss: masked RMSE plus a spatial-gradient term.
+"""Depth loss: SILog (Scale-Invariant Log) plus a spatial-gradient term.
 
 Three details that a naive formulation gets wrong, all handled here:
 
@@ -15,10 +15,9 @@ Three details that a naive formulation gets wrong, all handled here:
    makes the "RMSE" the square root of a signed mean, which becomes NaN the
    moment the model over-predicts on average.
 
-On the gradient term: taking gradients of the prediction alone is a smoothness
-prior that blurs edges; matching the prediction's gradients to the target's
-sharpen boundaries. `mode='smoothness'` is the smoothing formulation (the
-goal prior), `mode='matching'` compares against ground-truth gradients.
+Default objective: SILog (Eigen et al.) -- scale-invariant, the KITTI standard.
+Gradient term default: 'matching' -- matches prediction gradients to ground-truth
+gradients over valid pixel pairs, sharpening boundaries instead of just smoothing.
 """
 
 import torch
@@ -98,31 +97,50 @@ def gradient_loss(predicted, target=None, mode='smoothness', mask=None):
 
 
 def compute_depth_loss(predicted, target, alpha=config.GRAD_LOSS_ALPHA,
-                       gradient_mode='smoothness', return_parts=False):
-    """L = RMSE_masked(pred, gt) + alpha * gradient_term."""
+                       gradient_mode='matching', loss_type='silog',
+                       return_parts=False):
+    """L = SILog(pred, gt) + alpha * gradient_term.
+
+    loss_type: 'silog' (default, Eigen et al.) or 'rmse' (legacy).
+    gradient_mode: 'matching' (default, sharpens boundaries) or 'smoothness'.
+    """
     mask = valid_mask(target)
-    rmse = masked_rmse(predicted, target, mask)
+
+    if loss_type == 'silog':
+        base = scale_invariant_log_loss(predicted, target, mask=mask)
+        base_name = 'silog'
+    elif loss_type == 'rmse':
+        base = masked_rmse(predicted, target, mask)
+        base_name = 'rmse'
+    else:
+        raise ValueError(f"loss_type must be 'silog' or 'rmse', got {loss_type!r}")
+
     grad = gradient_loss(predicted, target, mode=gradient_mode, mask=mask)
-    total = rmse + alpha * grad
+    total = base + alpha * grad
 
     if return_parts:
-        return total, {'rmse': rmse.detach(), 'gradient': grad.detach(),
+        return total, {base_name: base.detach(), 'gradient': grad.detach(),
                        'valid_fraction': mask.float().mean().detach()}
     return total
 
 
 class DepthLoss(torch.nn.Module):
-    """`compute_depth_loss` as a module, for use inside an nn pipeline."""
+    """`compute_depth_loss` as a module, for use inside an nn pipeline.
+
+    Defaults to SILog + gradient matching (Eigen et al. KITTI protocol).
+    """
 
     def __init__(self, alpha=config.GRAD_LOSS_ALPHA,
-                 gradient_mode='smoothness'):
+                 gradient_mode='matching', loss_type='silog'):
         super().__init__()
         self.alpha = alpha
         self.gradient_mode = gradient_mode
+        self.loss_type = loss_type
 
     def forward(self, predicted, target, return_parts=False):
         return compute_depth_loss(predicted, target, alpha=self.alpha,
                                   gradient_mode=self.gradient_mode,
+                                  loss_type=self.loss_type,
                                   return_parts=return_parts)
 
 

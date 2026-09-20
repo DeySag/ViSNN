@@ -56,8 +56,11 @@ def parse_args():
     parser.add_argument('--weight-decay', type=float, default=config.WEIGHT_DECAY)
     parser.add_argument('--alpha', type=float, default=config.GRAD_LOSS_ALPHA,
                         help='weight of the spatial-gradient loss term')
-    parser.add_argument('--gradient-mode', default='smoothness',
+    parser.add_argument('--gradient-mode', default='matching',
                         choices=['smoothness', 'matching'])
+    parser.add_argument('--loss-type', default='silog',
+                        choices=['silog', 'rmse'],
+                        help='base loss: silog (Eigen KITTI standard) or rmse (legacy)')
     parser.add_argument('--num-workers', type=int, default=config.NUM_WORKERS)
 
     parser.add_argument('--timesteps', type=int, default=config.TIMESTEPS)
@@ -125,7 +128,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch,
         # Step 2: continuous decoder -- this is where the graph starts.
         predicted = model.decode(features)
 
-        # Step 3: masked RMSE + spatial gradient term.
+        # Step 3: masked loss + spatial gradient term.
         loss, parts = criterion(predicted, gt_depths, return_parts=True)
         loss.backward()
 
@@ -137,11 +140,18 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch,
 
         batch_size = images.shape[0]
         loss_meter.update(loss.item(), batch_size)
-        rmse_meter.update(parts['rmse'].item(), batch_size)
+        # Log actual RMSE for monitoring regardless of training loss type
+        from losses.depth_loss import masked_rmse, valid_mask
+        with torch.no_grad():
+            train_rmse = masked_rmse(predicted, gt_depths, valid_mask(gt_depths)).item()
+        rmse_meter.update(train_rmse, batch_size)
 
         if log_interval and (step + 1) % log_interval == 0:
+            base_key = 'silog' if args.loss_type == 'silog' else 'rmse'
+            base_val = parts.get(base_key, parts.get('rmse', torch.tensor(float('nan'))))
             print(f'  epoch {epoch} [{step + 1}/{len(loader)}]  '
-                  f'loss {loss_meter.avg:.4f}  rmse {rmse_meter.avg:.4f} m  '
+                  f'loss {loss_meter.avg:.4f}  {base_key} {base_val.item():.4f}  '
+                  f'train_rmse {rmse_meter.avg:.4f} m  '
                   f'valid {parts["valid_fraction"].item():.3f}')
 
     return {'loss': loss_meter.avg, 'train_rmse': rmse_meter.avg,
@@ -209,7 +219,8 @@ def main():
                             weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=max(args.epochs, 1))
-    criterion = DepthLoss(alpha=args.alpha, gradient_mode=args.gradient_mode)
+    criterion = DepthLoss(alpha=args.alpha, gradient_mode=args.gradient_mode,
+                          loss_type=args.loss_type)
 
     csv_writer = None
     if run_dir:

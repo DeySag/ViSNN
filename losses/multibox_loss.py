@@ -1,4 +1,4 @@
-"""SSD MultiBox loss: smooth-L1 localisation plus cross-entropy confidence.
+"""SSD MultiBox loss: smooth-L1 localisation plus Focal Loss confidence.
 
 Two details make SSD actually train:
 
@@ -7,10 +7,11 @@ handful of objects. Regression targets exist only for priors matched to a
 ground-truth box, so the localisation loss is computed over positives only.
 Averaging over all priors drowns the real targets in ~1190 meaningless ones.
 
-Hard-negative mining. With ~99% of priors labelled background, a plain mean
-cross-entropy is dominated by easy negatives and the model converges to
-"predict background everywhere". Only the hardest negatives per image
-contribute.
+Focal Loss (Lin et al., RetinaNet). With ~99% of priors labelled background,
+standard cross-entropy is dominated by easy negatives. Focal Loss natively
+down-weights well-classified examples (both easy background and easy positives)
+via a modulating factor (1 - p_t)^gamma, eliminating the need for hard-negative
+mining. This is the modern drop-in replacement for CE + mining.
 
 Both terms are normalised by the number of positives, the standard SSD
 convention, keeping the two terms on a comparable scale.
@@ -24,24 +25,54 @@ import config
 from models.box_utils import match_priors
 
 
+def focal_loss(logits, targets, alpha=0.25, gamma=2.0, reduction='sum'):
+    """Focal Loss (Lin et al., RetinaNet).
+
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Args:
+        logits: [N, C] raw scores (no softmax)
+        targets: [N] class indices in 0..C-1
+        alpha: weighting factor for rare classes (0.25 default)
+        gamma: focusing parameter (2.0 default)
+        reduction: 'sum' or 'mean'
+    """
+    log_probs = F.log_softmax(logits, dim=1)
+    probs = log_probs.exp()
+    targets_one_hot = F.one_hot(targets, num_classes=logits.size(1)).float()
+    p_t = (probs * targets_one_hot).sum(dim=1)  # probability of true class
+    log_p_t = (log_probs * targets_one_hot).sum(dim=1)
+    alpha_t = targets_one_hot * alpha + (1 - targets_one_hot) * (1 - alpha)
+    alpha_t = alpha_t.sum(dim=1)
+    loss = -alpha_t * (1 - p_t).pow(gamma) * log_p_t
+    if reduction == 'sum':
+        return loss.sum()
+    elif reduction == 'mean':
+        return loss.mean()
+    return loss
+
+
 class MultiBoxLoss(nn.Module):
-    """Composite SSD objective: localisation + confidence.
+    """Composite SSD objective: localisation + Focal Loss confidence.
 
     Args:
         priors: [P, 4] prior boxes in cxcywh, normalized. Registered as a
             buffer so it follows the module across `.to(device)`.
+        alpha: Focal Loss alpha (class weight for background vs foreground)
+        gamma: Focal Loss gamma (focusing parameter)
     """
 
     def __init__(self, priors, num_classes=config.NUM_CLASSES,
                  iou_threshold=config.SSD_IOU_THRESHOLD,
-                 neg_pos_ratio=config.SSD_NEG_POS_RATIO,
+                 focal_alpha=0.25, focal_gamma=2.0,
                  variances=config.SSD_LOC_VARIANCES):
         super().__init__()
         self.register_buffer('priors', priors.clone().detach(),
                              persistent=False)
         self.num_classes = num_classes
         self.iou_threshold = iou_threshold
-        self.neg_pos_ratio = neg_pos_ratio
+        self.focal_alpha = focal_alpha
+        self.focal_gamma = focal_gamma
         self.variances = variances
 
     # ------------------------------------------------------------------
@@ -95,28 +126,14 @@ class MultiBoxLoss(nn.Module):
         loc_loss = F.smooth_l1_loss(
             pred_locs[positives], loc_targets[positives], reduction='sum')
 
-        # --- Confidence: positives + hard negatives -------------------------
+        # --- Confidence: Focal Loss over ALL priors (no hard-negative mining) ---
+        # Focal Loss natively down-weights easy background examples via the
+        # (1 - p_t)^gamma term, so we don't need to mine hard negatives.
         flat_scores = pred_scores.view(-1, self.num_classes)
         flat_labels = label_targets.view(-1)
-        per_prior_loss = F.cross_entropy(
-            flat_scores, flat_labels, reduction='none').view(batch_size, -1)
-
-        # Rank negatives by loss within each image. Positives are pushed to the
-        # bottom so they cannot be selected as negatives too.
-        negative_loss = per_prior_loss.clone()
-        negative_loss[positives] = -1.0
-        _, loss_rank = negative_loss.sort(dim=1, descending=True)
-        _, rank = loss_rank.sort(dim=1)
-
-        pos_per_image = positives.sum(dim=1, keepdim=True)
-        num_negatives = torch.clamp(
-            self.neg_pos_ratio * pos_per_image,
-            max=num_priors - 1,
-        )
-        negatives = rank < num_negatives                    # [B, P]
-
-        selected = positives | negatives
-        cls_loss = per_prior_loss[selected].sum()
+        cls_loss = focal_loss(flat_scores, flat_labels,
+                              alpha=self.focal_alpha, gamma=self.focal_gamma,
+                              reduction='sum')
 
         # --- Normalise ------------------------------------------------------
         denominator = num_positives.clamp(min=1).float()
